@@ -65,6 +65,38 @@ reconcile, one database per producer.
 the future coordinator to drop-and-replace. Also deferred: crash-recovery
 manifest, auto-migrate, unknown-field detection, quarantine, streaming.
 
+## Troubleshooting: "Wire format was corrupt" / decode errors
+
+This almost always means the `.pb` **framing** does not match what the loader
+expects (varint length-delimited), not that values are missing — in proto3 a
+record with missing fields decodes fine.
+
+The loader now diagnoses this for you: on a decode failure it probes every known
+framing and tells you which one the file actually uses, e.g.
+
+```
+syscall_tracer.pb: could not read record 1 as syscall_tracer.v1.RawEvent (framing=varint): ...
+  framing probe (records decoded): varint=0/1, uint32be=20/20, uint32le=0/0, single=0/1
+  => the file looks like 'uint32be' framing, not 'varint'. Set input.framing: uint32be ...
+```
+
+You can also run the diagnosis directly on any file:
+
+```bash
+python tools/inspect_pb.py <file.pb>            # finds the .proto beside it
+python tools/inspect_pb.py <file.pb> --proto <schema.proto> --message RawEvent
+```
+
+Then set the framing in `analysis_fw/config.yaml`:
+
+```yaml
+input:
+  framing: uint32be     # varint | uint32be | uint32le | single
+```
+
+If **no** framing decodes cleanly, the `.proto` likely doesn't match the writer's
+schema (or the data is compressed) — confirm the schema version with Profile FW.
+
 ## Test
 
 ```bash

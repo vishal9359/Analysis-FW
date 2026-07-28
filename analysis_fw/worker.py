@@ -16,9 +16,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
+from google.protobuf.message import DecodeError
+
 from .errors import InputError
-from .framing import iter_messages
-from .registry import TableSchema, build_schema, _message_class_from_bytes
+from .framing import describe_failure, iter_messages
+from .registry import TableSchema
 from .store.base import Store
 
 # Header timestamp per format spec §3.1, e.g. "Sat Jun 27 14:40:48 2026",
@@ -41,19 +43,30 @@ class UnitResult:
 
 
 def parse_ts(s: str) -> datetime:
+    original = s
     s = s.strip()
     m = _BRACKETS.match(s)
     if m:
         s = m.group(1).strip()
+    if not s:
+        # An empty header timestamp on data that decoded "successfully" almost
+        # always means records are being split at the wrong boundaries.
+        raise InputError(
+            "header timestamp is empty — records are likely being read with the "
+            "wrong framing (empty messages decode as all-defaults). Check the "
+            "framing with:  python tools/inspect_pb.py <file.pb>")
     try:
         return datetime.strptime(s, _TS_FORMAT)
     except ValueError as exc:
-        raise InputError(f"cannot parse header timestamp {s!r}: {exc}") from exc
+        raise InputError(
+            f"cannot parse header timestamp {original!r} "
+            f"(expected e.g. 'Sat Jun 27 14:40:48 2026'): {exc}") from exc
 
 
 def _rows_from_file(pb_path: Path, schema: TableSchema, cls,
                     run_id: str, loaded_at: datetime, sut_expected: str | None,
-                    column_names: Sequence[str], batch_size: int, store: Store):
+                    column_names: Sequence[str], batch_size: int, store: Store,
+                    framing: str):
     """Decode one .pb file, emit rows in column order, insert in batches.
     Returns (read, inserted, sut_id_seen)."""
     batch: list[tuple] = []
@@ -61,10 +74,29 @@ def _rows_from_file(pb_path: Path, schema: TableSchema, cls,
     sut_id = sut_expected
     payload_fields = schema.payload_fields
 
-    for raw in iter_messages(pb_path):
-        msg = cls()
-        msg.ParseFromString(raw)
+    # The framing layer (iter_messages) can raise InputError on an implausible
+    # length, and the parser can raise DecodeError on bad content. A wrong
+    # framing shows up as either, so both route through one diagnosis.
+    records = iter_messages(pb_path, framing)
+    while True:
+        try:
+            raw, offset = next(records)
+        except StopIteration:
+            break
+        except InputError as exc:
+            raise InputError(describe_failure(
+                pb_path, cls, framing, read + 1, str(exc))) from None
+
         read += 1
+        msg = cls()
+        try:
+            msg.ParseFromString(raw)
+        except DecodeError:
+            # Turn "Wire format was corrupt" into a specific, forwardable
+            # diagnosis (framing mismatch / schema mismatch / bad record).
+            raise InputError(describe_failure(
+                pb_path, cls, framing, read, "protobuf wire format was corrupt",
+                raw=raw)) from None
 
         host = msg.hostname
         if sut_id is None:
@@ -96,7 +128,7 @@ def _rows_from_file(pb_path: Path, schema: TableSchema, cls,
 
 
 def load_unit(pb_parts: list[Path], schema: TableSchema, store: Store,
-              run_id: str, batch_size: int) -> UnitResult:
+              run_id: str, batch_size: int, framing: str = "varint") -> UnitResult:
     """Load all .pb parts of one unit into its table via `store`."""
     store.ensure_table(schema)
     loaded_at = datetime.now().replace(microsecond=0)
@@ -106,7 +138,7 @@ def load_unit(pb_parts: list[Path], schema: TableSchema, store: Store,
     for part in pb_parts:
         r, i, sut_id = _rows_from_file(
             part, schema, schema.message_cls, run_id, loaded_at, sut_id,
-            column_names, batch_size, store)
+            column_names, batch_size, store, framing)
         read += r
         inserted += i
     return UnitResult(stem=schema.stem, table=schema.stem,

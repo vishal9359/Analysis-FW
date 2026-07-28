@@ -73,6 +73,7 @@ class _Job:
     database: str
     batch_size: int
     async_insert: bool
+    framing: str
 
 
 def _run_job(job: _Job) -> UnitResult:
@@ -85,7 +86,7 @@ def _run_job(job: _Job) -> UnitResult:
     store.connect()
     try:
         return load_unit([Path(p) for p in job.pb_parts], schema, store,
-                         job.run_id, job.batch_size)
+                         job.run_id, job.batch_size, job.framing)
     finally:
         store.close()
 
@@ -115,7 +116,7 @@ def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadRe
             for u in units:
                 report.units.append(
                     load_unit(u.pb_parts, schemas[u.stem], st, run_id,
-                              cfg.store.batch_size))
+                              cfg.store.batch_size, cfg.framing))
         finally:
             if own:
                 st.close()
@@ -128,7 +129,7 @@ def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadRe
              message_full_name=schemas[u.stem].message_full_name,
              run_id=run_id, host=cfg.store.host, port=cfg.store.port,
              database=cfg.store.database, batch_size=cfg.store.batch_size,
-             async_insert=cfg.store.async_insert)
+             async_insert=cfg.store.async_insert, framing=cfg.framing)
         for u in units
     ]
     workers = min(cfg.store.workers, len(jobs))

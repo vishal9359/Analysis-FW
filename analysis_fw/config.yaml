@@ -6,6 +6,16 @@ producer:
   name: profile_fw          # label, used in logs/summary
   database: profile_fw      # ClickHouse database to write into (one per producer)
 
+input:
+  # How records are delimited inside a .pb file:
+  #   varint    [varint length][message]   (default; Go protodelim.MarshalTo)
+  #   uint32be  [4-byte big-endian length][message]
+  #   uint32le  [4-byte little-endian length][message]
+  #   single    the whole file is exactly one message
+  # On a decode failure the loader probes the other framings and tells you
+  # which one the file actually uses.
+  framing: varint
+
 store:
   host: localhost           # overridable by env CH_HOST
   port: 8123                # overridable by env CH_PORT (ClickHouse HTTP)

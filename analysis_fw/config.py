@@ -15,6 +15,7 @@ from pathlib import Path
 import yaml
 
 from .errors import ConfigError
+from .framing import FRAMINGS
 
 BUNDLED_CONFIG = Path(__file__).with_name("config.yaml")
 
@@ -33,6 +34,7 @@ class StoreConfig:
 class Config:
     producer_name: str
     store: StoreConfig
+    framing: str
     log_level: str
     log_format: str
 
@@ -57,6 +59,12 @@ def load_config(path: Path | None = None) -> Config:
     producer = _require(raw, "producer", "root")
     store = _require(raw, "store", "root")
     logging = raw.get("logging", {})
+    input_cfg = raw.get("input", {})
+
+    framing = str(input_cfg.get("framing", "varint"))
+    if framing not in FRAMINGS:
+        raise ConfigError(
+            f"config: input.framing must be one of {FRAMINGS}, got {framing!r}")
 
     try:
         host = os.environ.get("CH_HOST", str(_require(store, "host", "store")))
@@ -81,6 +89,7 @@ def load_config(path: Path | None = None) -> Config:
             workers=workers,
             async_insert=bool(store.get("async_insert", False)),
         ),
+        framing=framing,
         log_level=str(logging.get("level", "INFO")).upper(),
         log_format=str(logging.get("format", "json")).lower(),
     )

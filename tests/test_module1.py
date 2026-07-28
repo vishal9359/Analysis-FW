@@ -27,10 +27,10 @@ from analysis_fw.worker import load_unit, parse_ts
 FIXTURE = HERE / "_fixture" / "ProfileData-fixture-20260627-144048"
 
 
-def _cfg(workers=1, batch=250):
+def _cfg(workers=1, batch=250, framing="varint"):
     return Config("profile_fw",
                   StoreConfig("localhost", 8123, "profile_fw", batch, workers, False),
-                  "INFO", "text")
+                  framing, "INFO", "text")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -170,3 +170,49 @@ def test_second_hostname_rejected(tmp_path):
     store = MemoryStore(); store.connect()
     with pytest.raises(InputError, match="one SUT"):
         run_load(tmp_path / "ProfileData-multi-1", _cfg(), store=store)
+
+
+# ---- framing mismatch (the Profile FW "Wire format was corrupt" case) ----
+
+def test_wrong_framing_gives_diagnosis_not_crash(tmp_path):
+    """A varint fixture read as uint32be must fail with an actionable InputError
+    that names the real framing — not a raw DecodeError traceback."""
+    src = discover(FIXTURE)[0]  # block_type1, varint-framed
+    d = tmp_path / "ProfileData-mf-1" / "Linux" / "Block"
+    d.mkdir(parents=True)
+    (d / "block_type1.proto").write_text(src.proto_path.read_text())
+    (d / "block_type1.pb").write_bytes(src.pb_parts[0].read_bytes())
+    store = MemoryStore(); store.connect()
+    with pytest.raises(InputError) as exc:
+        run_load(tmp_path / "ProfileData-mf-1", _cfg(framing="uint32be"), store=store)
+    text = str(exc.value)
+    assert "could not read record 1" in text         # provenance
+    assert "framing probe" in text                   # it diagnosed
+    assert "Set input.framing: varint" in text       # and found the real framing
+
+
+def test_diagnose_framing_identifies_varint():
+    from analysis_fw.framing import diagnose_framing
+    from analysis_fw.registry import build_schema
+    src = discover(FIXTURE)[0]
+    schema = build_schema(src.stem, src.proto_path)
+    report = {r["framing"]: r for r in
+              diagnose_framing(src.pb_parts[0], schema.message_cls)}
+    assert report["varint"]["decoded"] == report["varint"]["tried"] > 0
+    assert report["uint32be"]["decoded"] == 0        # wrong framing decodes nothing
+
+
+def test_diagnose_framing_identifies_uint32be(tmp_path):
+    """uint32be data must NOT be mistaken for varint: reading it as varint yields
+    empty messages, which the probe must reject rather than count as decoded."""
+    from analysis_fw.framing import diagnose_framing, iter_messages
+    from analysis_fw.registry import build_schema
+    src = discover(FIXTURE)[0]
+    schema = build_schema(src.stem, src.proto_path)
+    pb = tmp_path / "u32.pb"
+    with open(pb, "wb") as fh:
+        for raw, _ in iter_messages(src.pb_parts[0], "varint"):
+            fh.write(struct.pack(">I", len(raw)) + raw)  # re-frame as uint32be
+    report = {r["framing"]: r for r in diagnose_framing(pb, schema.message_cls)}
+    assert report["uint32be"]["decoded"] == report["uint32be"]["tried"] > 0
+    assert report["varint"]["decoded"] == 0          # empty-message trap avoided
