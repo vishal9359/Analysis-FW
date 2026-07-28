@@ -1,0 +1,17 @@
+
+syntax = "proto3";
+package fix.block2;
+message Rec {
+  string timestamp = 1;
+  string hostname  = 2;
+  uint32 component = 3;
+  uint32 tag       = 4;
+  uint32 loglevel  = 5;
+  message Payload {
+    uint64 event_seq   = 1;
+    uint32 queue_depth = 2;
+    double util_pct    = 3;
+    bool   throttled   = 4;
+  }
+  Payload payload = 6;
+}

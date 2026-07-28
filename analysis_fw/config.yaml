@@ -1,0 +1,18 @@
+# Analysis FW — Module 1 bundled config.
+# Always loaded from inside the module. The input path is NOT here — it is the
+# one command-line argument, passed per run (by Airflow or by hand).
+
+producer:
+  name: profile_fw          # label, used in logs/summary
+  database: profile_fw      # ClickHouse database to write into (one per producer)
+
+store:
+  host: localhost           # overridable by env CH_HOST
+  port: 8123                # overridable by env CH_PORT (ClickHouse HTTP)
+  batch_size: 100000        # rows per insert
+  workers: 4                # process-pool size (how many .pb files load at once)
+  async_insert: false       # must stay false so row counts are truthful
+
+logging:
+  level: INFO               # DEBUG | INFO | WARNING | ERROR
+  format: json              # json | text

@@ -1,0 +1,8 @@
+# Analysis FW — Module 1
+protobuf>=4.25
+grpcio-tools>=1.60     # bundles protoc for runtime .proto compilation
+PyYAML>=6.0
+clickhouse-connect>=0.7
+
+# dev/test only
+pytest>=7.0
