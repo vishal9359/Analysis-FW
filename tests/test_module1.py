@@ -101,11 +101,26 @@ def test_rejects_proto_without_generic_format(tmp_path):
 
 # ---- timestamp ----------------------------------------------------------
 
-def test_parse_ts_ok_and_tolerant():
+def test_parse_ts_formats():
     assert parse_ts("Mon Jul 27 18:02:21 2026").year == 2026
     assert parse_ts("[Mon Jul 27 18:02:21 2026]").hour == 18
-    assert parse_ts("") is None                 # tolerated, not fatal
-    assert parse_ts("garbage") is None          # tolerated, not fatal
+    assert parse_ts("2026-07-27T18:02:21").minute == 2
+    # full names, NO year, trailing ms (the real block_1 shape)
+    dt = parse_ts("Monday July 27 18:01:46:233")
+    assert dt is not None and (dt.month, dt.day, dt.second) == (7, 27, 46)
+    assert parse_ts("") is None and parse_ts("garbage") is None
+
+
+def test_ts_for_db_never_out_of_range():
+    """The `ts` value must always pack into ClickHouse's unsigned DateTime
+    (0..4294967295) — this is the insert crash that was fixed."""
+    import struct
+    from analysis_fw.worker import ts_for_db
+    for s in ["Monday July 27 18:01:46:233", "Mon Jul 27 18:02:21 2026",
+              "", "garbage", "Sat Jun 27 14:40:48 1969"]:
+        epoch = int(ts_for_db(s).timestamp())
+        assert 0 <= epoch <= 4294967295
+        struct.pack("I", epoch)          # must not raise
 
 
 # ---- end to end ---------------------------------------------------------
