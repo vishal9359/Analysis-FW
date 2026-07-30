@@ -1,163 +1,126 @@
 #!/usr/bin/env python3
 """
-Generate a ProfileData-* tree in the wrapper format Profile FW uses.
+Generate a ProfileData-* tree from real .proto files, with FULL payloads.
 
-Each record is a "sample" message = generic_format (GenericFormat header) + a
-payload sub-message. Records are written NOT as delimited messages but inside a
-single wrapper message with a `repeated` field, one wrapper message per .pb file
-(a big run is split into several .pb files, each a complete wrapper message).
+Reads every .proto in tests/sample_protos/ (the real Profile FW protos), and for
+each one generates wrapper .pb data that fills EVERY generic and payload field —
+so the fixture always matches the proto, even after fields are added. It reuses
+the loader's own schema detection (analysis_fw.registry), so the fixture can
+never drift from what the loader expects.
 
-    ProfileData-<tag>-<timestamp>/
-      Config/run_config.log
-      Linux/Block/
-        linux_block_1_stats.proto   linux_block_1_stats.pb
-        linux_block_2_misc.proto    linux_block_2_misc.pb
+    python make_fixture.py [output_root] [--protos DIR]
 
-    python make_fixture.py [output_root]
+A .pb file is one wrapper message holding a `repeated` list of records (no
+delimiters). A big unit is split into several .pb files, each a complete wrapper.
 """
 from __future__ import annotations
 
+import argparse
 import sys
-import tempfile
 from pathlib import Path
 
-import grpc_tools
-from grpc_tools import protoc
-from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
 
-# Two real-shaped protos: header in GenericFormat, payload in its own message,
-# a per-record "sample" message (fields named generic_format + payload, per the
-# agreed contract), and a repeated wrapper.
-PROTOS = {
-    "linux_block_1_stats": '''
-syntax = "proto3";
-message BlockDeviceStat {
-  optional string device = 1;
-  optional uint64 read_ios = 2;
-  optional uint64 sectors_read = 3;
-  optional uint64 write_ios = 4;
-  optional uint64 io_time = 5;
-}
-message GenericFormat {
-  optional string timestamp = 1;
-  optional string hostname = 2;
-  optional uint32 component = 3;
-  optional string tag = 4;
-  optional uint32 log_level = 5;
-}
-message BlockStatSample {
-  GenericFormat generic_format = 1;
-  BlockDeviceStat payload = 2;
-}
-message BlockDeviceStatLog {
-  repeated BlockStatSample block_device_stats = 1;
-}''',
-    "linux_block_2_misc": '''
-syntax = "proto3";
-message GenericFormat {
-  optional string timestamp = 1;
-  optional string hostname = 2;
-  optional uint32 component = 3;
-  optional string tag = 4;
-  optional uint32 log_level = 5;
-}
-message BlkBioQueuePayload {
-  optional uint64 read_splits = 6;
-  optional uint64 read_4kb = 7;
-  optional uint64 write_4kb = 8;
-  optional uint64 read_bios = 9;
-  optional uint64 write_bios = 10;
-}
-message BlkBioQueueEvent {
-  GenericFormat generic_format = 1;
-  BlkBioQueuePayload payload = 2;
-}
-message BlkBioQueueEvents {
-  repeated BlkBioQueueEvent blk_bio_queue_events = 1;
-}''',
+from analysis_fw.registry import build_schema  # reuse the loader's detection
+
+DEFAULT_PROTOS = HERE / "sample_protos"
+
+# How many records per unit, and how many .pb files to split it across.
+# (Splitting one keeps the multi-file path exercised.)
+COUNTS = {"linux_block_1_stats": (1000, 2), "linux_block_2_misc": (400, 1)}
+DEFAULT_COUNT, DEFAULT_SPLITS = 200, 1
+
+# Layer subdir from the filename's layer token.
+LAYER_DIRS = {
+    "block": "Linux/Block", "nvme": "Linux/NVMe", "syscall": "Linux/Syscall",
+    "memory": "Linux/Memory", "filesystem": "Linux/Filesystem",
+    "platform": "Platform", "ssd": "SSD",
 }
 
-# stem -> (subdir, component, wrapper msg, repeated field, record msg,
-#          payload field, record count, split count)
-PLACEMENT = {
-    "linux_block_1_stats": ("Linux/Block", 1, "BlockDeviceStatLog",
-                            "block_device_stats", "BlockStatSample",
-                            "payload", 1000, 2),
-    "linux_block_2_misc": ("Linux/Block", 1, "BlkBioQueueEvents",
-                           "blk_bio_queue_events", "BlkBioQueueEvent",
-                           "payload", 400, 1),
-}
-
+TIMESTAMP = "Mon Jul 27 18:02:21 2026"
 HOSTNAME = "spark-e97e"
 TAG = "test1"
 
 
-def classes(text: str):
-    tmp = Path(tempfile.mkdtemp())
-    (tmp / "s.proto").write_text(text)
-    inc = Path(grpc_tools.__file__).parent / "_proto"
-    out = tmp / "d.desc"
-    if protoc.main(["protoc", f"-I{tmp}", f"-I{inc}",
-                    f"--descriptor_set_out={out}", "--include_imports",
-                    str(tmp / "s.proto")]) != 0:
-        raise SystemExit("protoc failed")
-    pool = descriptor_pool.DescriptorPool()
-    fds = descriptor_pb2.FileDescriptorSet()
-    fds.ParseFromString(out.read_bytes())
-    for f in fds.file:
-        pool.Add(f)
-
-    def cls(name):
-        return message_factory.GetMessageClass(pool.FindMessageTypeByName(name))
-    return cls
+def layer_dir_for(stem: str) -> str:
+    for tok in stem.split("_"):
+        if tok in LAYER_DIRS:
+            return LAYER_DIRS[tok]
+    return "Linux/Other"
 
 
-def make_wrapper(cls, wrapper_name, repeated_field, record_name, payload_field,
-                 component, n):
-    wrapper = cls(wrapper_name)()
-    records = getattr(wrapper, repeated_field)
-    for i in range(1, n + 1):
+def _set_scalar(msg, field, i: int) -> None:
+    """Set one scalar field to a distinct sample value, by type."""
+    cpp = field.cpp_type
+    if cpp == field.CPPTYPE_STRING:
+        setattr(msg, field.name, "nvme0n1" if field.name == "device" else f"s{i}")
+    elif cpp in (field.CPPTYPE_FLOAT, field.CPPTYPE_DOUBLE):
+        setattr(msg, field.name, float(i % 100) + 0.5)
+    elif cpp == field.CPPTYPE_BOOL:
+        setattr(msg, field.name, i % 2 == 0)
+    elif cpp == field.CPPTYPE_ENUM:
+        setattr(msg, field.name, 0)
+    else:  # any int
+        setattr(msg, field.name, (i * 7) % 1_000_000)
+
+
+def make_wrapper(schema, count: int):
+    """Build one wrapper message with `count` fully-populated records."""
+    wrapper = schema.wrapper_cls()
+    records = getattr(wrapper, schema.repeated_field)
+    for i in range(1, count + 1):
         rec = records.add()
-        g = rec.generic_format
-        g.timestamp = "Mon Jul 27 18:02:21 2026"
+        g = getattr(rec, schema.generic_field)
+        g.timestamp = TIMESTAMP
         g.hostname = HOSTNAME
-        g.component = component
+        g.component = 1
         g.tag = TAG
         g.log_level = 3
-        p = getattr(rec, payload_field)
-        for f in p.DESCRIPTOR.fields:
-            if f.cpp_type == f.CPPTYPE_STRING:
-                setattr(p, f.name, "nvme0n1")
-            else:
-                setattr(p, f.name, (i * 7) % 100000)
+        p = getattr(rec, schema.payload_field)
+        for f in p.DESCRIPTOR.fields:      # EVERY payload field, whatever they are
+            _set_scalar(p, f, i)
     return wrapper
 
 
 def main() -> None:
-    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("./fixture_out")
-    run_dir = root / "ProfileData-fixture-20260727-180221"
+    ap = argparse.ArgumentParser()
+    ap.add_argument("output_root", nargs="?", default="./fixture_out", type=Path)
+    ap.add_argument("--protos", type=Path, default=DEFAULT_PROTOS,
+                    help="directory of .proto files (default: tests/sample_protos)")
+    args = ap.parse_args()
+
+    protos = sorted(args.protos.glob("*.proto"))
+    if not protos:
+        sys.exit(f"no .proto files in {args.protos}")
+
+    run_dir = args.output_root / "ProfileData-fixture-20260727-180221"
     (run_dir / "Config").mkdir(parents=True, exist_ok=True)
     (run_dir / "Config" / "run_config.log").touch()
 
     total = 0
-    for stem, text in PROTOS.items():
-        subdir, comp, wname, rfield, rname, pfield, n, splits = PLACEMENT[stem]
-        cls = classes(text)
-        d = run_dir / subdir
-        d.mkdir(parents=True, exist_ok=True)
-        (d / f"{stem}.proto").write_text(text)
+    for proto in protos:
+        stem = proto.stem
+        schema = build_schema(stem, proto)
+        count, splits = COUNTS.get(stem, (DEFAULT_COUNT, DEFAULT_SPLITS))
 
-        # split the n records into `splits` wrapper messages, one per .pb file
-        per = (n + splits - 1) // splits
+        d = run_dir / layer_dir_for(stem)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{stem}.proto").write_text(proto.read_text())
+
+        per = (count + splits - 1) // splits
         for idx in range(splits):
-            lo, hi = idx * per, min((idx + 1) * per, n)
+            lo, hi = idx * per, min((idx + 1) * per, count)
             if lo >= hi:
                 continue
-            wrapper = make_wrapper(cls, wname, rfield, rname, pfield, comp, hi - lo)
+            wrapper = make_wrapper(schema, hi - lo)
             name = f"{stem}.pb" if splits == 1 else f"{stem}.{idx:03d}.pb"
             (d / name).write_bytes(wrapper.SerializeToString())
-        total += n
-        print(f"  {subdir}/{stem}: {n} records, {splits} wrapper file(s)")
+
+        n_payload = len(schema.payload_fields)
+        total += count
+        print(f"  {layer_dir_for(stem)}/{stem}: {count} records, "
+              f"{splits} file(s), {n_payload} payload fields")
 
     print(f"\n{total} records total -> {run_dir}")
 
