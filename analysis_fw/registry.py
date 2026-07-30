@@ -1,16 +1,17 @@
-"""Schema registry: compile a unit's .proto and derive its table.
+"""Schema registry: compile a producer's .proto and derive its table — generically.
 
-Each .proto defines one message following the format contract:
-  - header scalar fields 1-5 (timestamp, hostname, component, tag, loglevel)
-  - a nested Payload message in field 6, whose fields are scalars
+Each .proto defines, by convention:
+  - GenericFormat   : the common header fields (timestamp, hostname, ...).
+  - a payload msg   : the layer-specific fields.
+  - a record msg    : { GenericFormat generic_format = 1; <Payload> <name> = 2; }
+                      -- one row of data. Identified by having a GenericFormat field.
+  - a wrapper msg   : { repeated <record> <name> = 1; }
+                      -- what a .pb file actually contains (no delimiters needed;
+                      the repeated field structures the records internally).
 
-From that we derive the ClickHouse columns and CREATE TABLE, and keep the
-message class for decoding. Nothing about the schema is written in code — it is
-all read from the .proto at runtime, so a new field / new type / new producer
-needs no code change.
-
-Each .proto is compiled into its own descriptor pool, so package/message-name
-reuse across different types cannot collide.
+The loader identifies these by STRUCTURE, not by field names, so a new field, a
+renamed payload field, or a new layer needs no code change. The .proto is
+compiled at runtime; no generated classes are a build dependency.
 """
 from __future__ import annotations
 
@@ -26,33 +27,21 @@ from google.protobuf.descriptor import FieldDescriptor as FD
 
 from .errors import SchemaError
 
-HEADER_FIELDS = ("timestamp", "hostname", "component", "tag", "loglevel")
-PAYLOAD_FIELD = "payload"
+GENERIC_MESSAGE = "GenericFormat"   # the type that marks a record and holds the header
 
 # protobuf field type -> ClickHouse type
 _PROTO_TO_CH = {
-    FD.TYPE_STRING: "String",
-    FD.TYPE_BYTES: "String",
-    FD.TYPE_BOOL: "Bool",
+    FD.TYPE_STRING: "String", FD.TYPE_BYTES: "String", FD.TYPE_BOOL: "Bool",
     FD.TYPE_INT32: "Int32", FD.TYPE_SINT32: "Int32", FD.TYPE_SFIXED32: "Int32",
     FD.TYPE_INT64: "Int64", FD.TYPE_SINT64: "Int64", FD.TYPE_SFIXED64: "Int64",
     FD.TYPE_UINT32: "UInt32", FD.TYPE_FIXED32: "UInt32",
     FD.TYPE_UINT64: "UInt64", FD.TYPE_FIXED64: "UInt64",
-    FD.TYPE_FLOAT: "Float32",
-    FD.TYPE_DOUBLE: "Float64",
-    FD.TYPE_ENUM: "Int32",
+    FD.TYPE_FLOAT: "Float32", FD.TYPE_DOUBLE: "Float64", FD.TYPE_ENUM: "Int32",
 }
 
-# Fixed header columns, added to every table. Order matters — worker rows follow it.
-HEADER_COLUMNS = [
-    ("run_id", "String"),
-    ("sut_id", "String"),
-    ("ts", "DateTime"),
-    ("tag", "UInt32"),
-    ("loglevel", "UInt8"),
-    ("component", "UInt8"),
-    ("_loaded_at", "DateTime"),
-]
+# Loader-added bookkeeping columns (not from the proto).
+LEADING_COLUMNS = [("run_id", "String"), ("ts", "DateTime")]
+TRAILING_COLUMNS = [("_loaded_at", "DateTime")]
 
 
 @dataclass(frozen=True)
@@ -63,123 +52,135 @@ class Column:
 
 @dataclass
 class TableSchema:
-    stem: str                 # == table name
-    message_cls: type
-    payload_fields: list[str]  # payload scalar field names, in column order
-    columns: list[Column]      # header columns + payload columns, in order
-    descriptor_bytes: bytes    # serialized FileDescriptorSet (picklable for workers)
-    message_full_name: str
-    schema_version: str        # sha256 of descriptor_bytes
+    stem: str                      # == table name
+    record_cls: type               # the per-row message (e.g. BlockStatSample)
+    wrapper_cls: type | None       # the repeated wrapper (e.g. BlockDeviceStatLog)
+    repeated_field: str | None     # the repeated field name inside the wrapper
+    generic_field: str             # the GenericFormat field name on the record
+    payload_field: str             # the payload field name on the record
+    generic_fields: list[str]      # header field names, in column order
+    payload_fields: list[str]      # payload field names, in column order
+    columns: list[Column]          # full table columns, in row order
+    descriptor_bytes: bytes        # picklable, for worker processes
+    schema_version: str
 
 
-def _compile(proto_path: Path) -> tuple[bytes, list]:
-    """Compile one .proto into a FileDescriptorSet (bytes + parsed files)."""
+def _scalar_columns(msg_desc, source: str) -> tuple[list[str], list[Column]]:
+    names, cols = [], []
+    for f in msg_desc.fields:
+        if f.is_repeated:
+            raise SchemaError(f"{source}: {msg_desc.name}.{f.name} is repeated "
+                              f"(payload/header fields must be scalars)")
+        if f.type == FD.TYPE_MESSAGE:
+            raise SchemaError(f"{source}: {msg_desc.name}.{f.name} is a nested "
+                              f"message (payload/header fields must be scalars)")
+        ch = _PROTO_TO_CH.get(f.type)
+        if ch is None:
+            raise SchemaError(f"{source}: {msg_desc.name}.{f.name} has unsupported "
+                              f"protobuf type {f.type}")
+        names.append(f.name)
+        cols.append(Column(f.name, ch))
+    return names, cols
+
+
+def _detect(pool, primary_file, source: str):
+    """Find the record message (has a singular GenericFormat field) and, if
+    present, the wrapper message (has a `repeated <record>` field)."""
+    messages = {m.name: pool.FindMessageTypeByName(
+        f"{primary_file.package + '.' if primary_file.package else ''}{m.name}")
+        for m in primary_file.message_type}
+
+    record_desc = generic_field = payload_field = None
+    for desc in messages.values():
+        gfield = pfield = None
+        for f in desc.fields:
+            if f.type != FD.TYPE_MESSAGE or f.is_repeated:
+                continue
+            if f.message_type.name == GENERIC_MESSAGE:
+                gfield = f
+            else:
+                pfield = f
+        if gfield is not None:
+            if record_desc is not None:
+                raise SchemaError(
+                    f"{source}: more than one record message (both "
+                    f"{record_desc.name} and {desc.name} have a {GENERIC_MESSAGE} "
+                    f"field); expected exactly one")
+            if pfield is None:
+                raise SchemaError(f"{source}: record {desc.name} has a "
+                                  f"{GENERIC_MESSAGE} field but no payload message")
+            record_desc, generic_field, payload_field = desc, gfield, pfield
+
+    if record_desc is None:
+        raise SchemaError(
+            f"{source}: no record message found — expected a message with a "
+            f"singular '{GENERIC_MESSAGE}' field (the header) plus a payload "
+            f"message. Does the .proto follow the generic_format convention?")
+
+    # wrapper = a message with a `repeated <record>` field
+    wrapper_desc = repeated_field = None
+    for desc in messages.values():
+        for f in desc.fields:
+            if (f.is_repeated and f.type == FD.TYPE_MESSAGE
+                    and f.message_type.name == record_desc.name):
+                wrapper_desc, repeated_field = desc, f.name
+                break
+        if wrapper_desc is not None:
+            break
+
+    return record_desc, generic_field, payload_field, wrapper_desc, repeated_field
+
+
+def build_schema(stem: str, proto_path: Path) -> TableSchema:
     inc = Path(grpc_tools.__file__).parent / "_proto"
     out = Path(tempfile.mkdtemp()) / "d.desc"
-    rc = protoc.main([
-        "protoc", f"-I{proto_path.parent}", f"-I{inc}",
-        f"--descriptor_set_out={out}", "--include_imports", str(proto_path),
-    ])
+    rc = protoc.main(["protoc", f"-I{proto_path.parent}", f"-I{inc}",
+                      f"--descriptor_set_out={out}", "--include_imports",
+                      str(proto_path)])
     if rc != 0:
         raise SchemaError(f"{proto_path.name}: protoc failed to compile")
-    raw = out.read_bytes()
-    fds = descriptor_pb2.FileDescriptorSet()
-    fds.ParseFromString(raw)
-    return raw, list(fds.file)
+    return build_schema_from_descriptor(stem, out.read_bytes(), source=proto_path.name)
 
 
-def _message_class_from_bytes(descriptor_bytes: bytes, full_name: str):
-    """Rebuild a message class from descriptor bytes in an isolated pool.
-
-    Used both here and inside worker processes (bytes are picklable; message
-    classes are not).
-    """
+def build_schema_from_descriptor(stem: str, descriptor_bytes: bytes,
+                                 source: str = "<descriptor>") -> TableSchema:
+    """Derive the table schema from compiled descriptor bytes. Used by both the
+    parent (from a .proto file) and worker child processes (bytes are picklable;
+    classes are not), so detection rules live in exactly one place."""
     pool = descriptor_pool.DescriptorPool()
     fds = descriptor_pb2.FileDescriptorSet()
     fds.ParseFromString(descriptor_bytes)
     for f in fds.file:
         pool.Add(f)
-    return message_factory.GetMessageClass(pool.FindMessageTypeByName(full_name))
+    primary = next((f for f in fds.file if Path(f.name).name == source), fds.file[-1])
 
+    rec_desc, gfield, pfield, wrap_desc, rep_field = _detect(pool, primary, source)
 
-def _pick_message(files, primary_name: str) -> str:
-    """The unit's .proto must define exactly one top-level message (the record).
+    record_cls = message_factory.GetMessageClass(rec_desc)
+    wrapper_cls = (message_factory.GetMessageClass(wrap_desc)
+                   if wrap_desc is not None else None)
 
-    `files` may include imported protos (e.g. a shared header); the primary is
-    the one whose filename matches, so imports don't confuse message selection.
-    """
-    primary = next((f for f in files if Path(f.name).name == primary_name), files[-1])
-    msgs = list(primary.message_type)
-    if len(msgs) != 1:
-        raise SchemaError(
-            f"{primary_name}: expected exactly one top-level message, found "
-            f"{[m.name for m in msgs]}"
-        )
-    pkg = primary.package
-    return f"{pkg + '.' if pkg else ''}{msgs[0].name}"
+    generic_names, generic_cols = _scalar_columns(gfield.message_type, source)
+    payload_names, payload_cols = _scalar_columns(pfield.message_type, source)
 
+    columns = ([Column(n, t) for n, t in LEADING_COLUMNS]
+               + generic_cols + payload_cols
+               + [Column(n, t) for n, t in TRAILING_COLUMNS])
 
-def build_schema(stem: str, proto_path: Path) -> TableSchema:
-    """Compile a .proto file and derive its table schema."""
-    descriptor_bytes, files = _compile(proto_path)
-    full_name = _pick_message(files, proto_path.name)
-    return build_schema_from_descriptor(stem, descriptor_bytes, full_name,
-                                        source=proto_path.name)
+    # guard against a name clash between a generic and a payload field
+    seen = set()
+    for c in columns:
+        if c.name in seen:
+            raise SchemaError(f"{source}: duplicate column '{c.name}' "
+                              f"(a generic and a payload field share a name)")
+        seen.add(c.name)
 
-
-def build_schema_from_descriptor(stem: str, descriptor_bytes: bytes,
-                                 message_full_name: str,
-                                 source: str = "<descriptor>") -> TableSchema:
-    """Derive a table schema from already-compiled descriptor bytes.
-
-    Both the parent (via build_schema) and worker child processes use this, so
-    the header/payload/column rules exist in exactly one place.
-    """
-    full_name = message_full_name
-    cls = _message_class_from_bytes(descriptor_bytes, full_name)
-    desc = cls.DESCRIPTOR
-
-    # validate the mandated header
-    by_name = {f.name: f for f in desc.fields}
-    missing = [h for h in HEADER_FIELDS if h not in by_name]
-    if missing:
-        raise SchemaError(
-            f"{source}: message '{desc.name}' missing contract header "
-            f"field(s): {missing}"
-        )
-
-    # locate the payload (nested message in field 6 / named 'payload')
-    if PAYLOAD_FIELD not in by_name:
-        raise SchemaError(f"{source}: message has no '{PAYLOAD_FIELD}' field")
-    payload_fd = by_name[PAYLOAD_FIELD]
-    if payload_fd.message_type is None:
-        raise SchemaError(f"{source}: '{PAYLOAD_FIELD}' must be a message")
-
-    # derive payload columns — scalars only
-    payload_fields: list[str] = []
-    payload_cols: list[Column] = []
-    for f in payload_fd.message_type.fields:
-        if f.is_repeated:
-            raise SchemaError(f"{source}: payload.{f.name} is repeated "
-                              f"(payloads must be scalars only)")
-        if f.type == FD.TYPE_MESSAGE:
-            raise SchemaError(f"{source}: payload.{f.name} is a nested "
-                              f"message (payloads must be scalars only)")
-        ch = _PROTO_TO_CH.get(f.type)
-        if ch is None:
-            raise SchemaError(f"{source}: payload.{f.name} has unsupported "
-                              f"protobuf type {f.type}")
-        payload_fields.append(f.name)
-        payload_cols.append(Column(f.name, ch))
-
-    columns = [Column(n, t) for n, t in HEADER_COLUMNS] + payload_cols
     return TableSchema(
-        stem=stem,
-        message_cls=cls,
-        payload_fields=payload_fields,
-        columns=columns,
+        stem=stem, record_cls=record_cls, wrapper_cls=wrapper_cls,
+        repeated_field=rep_field, generic_field=gfield.name,
+        payload_field=pfield.name, generic_fields=generic_names,
+        payload_fields=payload_names, columns=columns,
         descriptor_bytes=descriptor_bytes,
-        message_full_name=full_name,
         schema_version="sha256:" + hashlib.sha256(descriptor_bytes).hexdigest()[:16],
     )
 
@@ -190,6 +191,6 @@ def create_table_ddl(database: str, schema: TableSchema) -> str:
         f"CREATE TABLE IF NOT EXISTS `{database}`.`{schema.stem}`\n"
         f"(\n    {cols}\n)\n"
         f"ENGINE = MergeTree\n"
-        f"PARTITION BY (run_id, sut_id)\n"
-        f"ORDER BY (run_id, sut_id, ts)"
+        f"PARTITION BY run_id\n"
+        f"ORDER BY (run_id, hostname, ts)"
     )

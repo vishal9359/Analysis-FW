@@ -1,0 +1,23 @@
+
+syntax = "proto3";
+message GenericFormat {
+  optional string timestamp = 1;
+  optional string hostname = 2;
+  optional uint32 component = 3;
+  optional string tag = 4;
+  optional uint32 log_level = 5;
+}
+message BlkBioQueuePayload {
+  optional uint64 read_splits = 6;
+  optional uint64 read_4kb = 7;
+  optional uint64 write_4kb = 8;
+  optional uint64 read_bios = 9;
+  optional uint64 write_bios = 10;
+}
+message BlkBioQueueEvent {
+  GenericFormat generic_format = 1;
+  BlkBioQueuePayload blk_bio_queue_payload = 2;
+}
+message BlkBioQueueEvents {
+  repeated BlkBioQueueEvent blk_bio_queue_events = 1;
+}

@@ -35,15 +35,33 @@ CH_HOST=10.0.0.5 CH_PORT=8123 python -m analysis_fw <input_dir>
 Each layer folder holds one or more **types**, each a `.proto` + its `.pb` data:
 
 ```
-<layer>_<type>.proto        schema — one message: contract header + payload (scalars)
+<layer>_<type>.proto        schema (see message shape below)
 <layer>_<type>.pb           data, single file
 <layer>_<type>.<NNN>.pb     data, split parts in order 000, 001, …
 ```
 
-- **Table = file stem** (`block_type1`). Each type lands in its own table.
-- The schema is read from the `.proto` at runtime — new fields / types / producers
-  need no code change.
-- Framing is varint length-delimited. `Config/` is ignored.
+Each `.proto` follows the **generic_format convention**:
+
+```proto
+message GenericFormat { string timestamp; string hostname; uint32 component;
+                        string tag; uint32 log_level; }         // the header
+message <Payload>     { ... layer-specific scalar fields ... }  // the data
+message <Record>      { GenericFormat generic_format = 1;       // one row
+                        <Payload> <name> = 2; }
+message <Wrapper>     { repeated <Record> <name> = 1; }         // a .pb file
+```
+
+- A `.pb` file **is one `<Wrapper>` message** holding a `repeated` list of records.
+  Protobuf's repeated encoding delimits the records internally — **no framing /
+  length prefix**. A big run is split into several `.pb` files, each a complete
+  wrapper message.
+- The loader finds the record/header/payload/wrapper **by structure** (the record
+  is the message with a `GenericFormat` field), not by names — so a renamed
+  payload field or a new layer needs no code change.
+- **Table = file stem** (`linux_block_1_stats`). Each type → its own table.
+- Each row is flattened: `run_id`, `ts` (parsed from `timestamp`), the generic
+  fields, the payload fields, `_loaded_at`.
+- `Config/` is ignored.
 
 ## What it does
 
@@ -57,45 +75,29 @@ Each layer folder holds one or more **types**, each a `.proto` + its `.pb` data:
 
 ## MVP scope
 
-In: discover, runtime schema, parallel read/decode, batched insert, per-unit
-reconcile, one database per producer.
+In: discover, runtime schema (generic detection), parallel read, batched insert,
+per-unit reconcile, one database per producer.
 
 **Not yet (deferred, see design):** clean reload — **re-running a load appends
-(duplicates)**; the table's `PARTITION BY (run_id, sut_id)` is already set up for
-the future coordinator to drop-and-replace. Also deferred: crash-recovery
-manifest, auto-migrate, unknown-field detection, quarantine, streaming.
+(duplicates)**; the table's `PARTITION BY run_id` is already set up for the future
+coordinator to drop-and-replace. Also deferred: crash-recovery manifest,
+auto-migrate (adding a field to an existing table needs a one-time
+`ALTER TABLE ADD COLUMN`), quarantine, streaming.
 
-## Troubleshooting: "Wire format was corrupt" / decode errors
+## Troubleshooting decode errors
 
-This almost always means the `.pb` **framing** does not match what the loader
-expects (varint length-delimited), not that values are missing — in proto3 a
-record with missing fields decodes fine.
-
-The loader now diagnoses this for you: on a decode failure it probes every known
-framing and tells you which one the file actually uses, e.g.
+If a `.pb` fails to parse, the loader reports it as an input error (exit 3) with
+the file, the expected message type, and the first bytes — for example:
 
 ```
-syscall_tracer.pb: could not read record 1 as syscall_tracer.v1.RawEvent (framing=varint): ...
-  framing probe (records decoded): varint=0/1, uint32be=20/20, uint32le=0/0, single=0/1
-  => the file looks like 'uint32be' framing, not 'varint'. Set input.framing: uint32be ...
+linux_block_1_stats.pb: could not parse the file as BlockDeviceStatLog (...).
+  => the .pb likely does not match its .proto (wrong schema/version), or the
+     file is truncated/corrupt. Confirm the .proto with Profile FW.
 ```
 
-You can also run the diagnosis directly on any file:
-
-```bash
-python tools/inspect_pb.py <file.pb>            # finds the .proto beside it
-python tools/inspect_pb.py <file.pb> --proto <schema.proto> --message RawEvent
-```
-
-Then set the framing in `analysis_fw/config.yaml`:
-
-```yaml
-input:
-  framing: uint32be     # varint | uint32be | uint32le | single
-```
-
-If **no** framing decodes cleanly, the `.proto` likely doesn't match the writer's
-schema (or the data is compressed) — confirm the schema version with Profile FW.
+Because the format is now one self-delimited wrapper message per file, a decode
+failure means the `.pb` doesn't match its `.proto` (schema/version drift) or the
+file is corrupt — not a framing question.
 
 ## Test
 

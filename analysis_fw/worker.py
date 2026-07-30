@@ -1,12 +1,12 @@
 """Load one unit (one <layer>_<type>) into its table.
 
-The worker is deliberately usable two ways:
-  - in-process, given a live Store (tests, single-worker runs);
-  - in a child process, given only picklable data, where it builds its own
-    Store and message class (parallel runs).
+For each record (from the wrapper's repeated field), flatten the generic header
+sub-message and the payload sub-message into one flat row, prefixed with run_id
+and a parsed ts, suffixed with the ingest time. Column order matches
+TableSchema.columns.
 
-Both call `load_unit`, so the decode/row-building path is identical and tested
-once.
+Usable in-process (tests, single worker) or in a child process (parallel) — both
+call `load_unit`, so the decode/row-building path is identical and tested once.
 """
 from __future__ import annotations
 
@@ -14,17 +14,14 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
-
-from google.protobuf.message import DecodeError
 
 from .errors import InputError
-from .framing import describe_failure, iter_messages
+from .reader import iter_records
 from .registry import TableSchema
 from .store.base import Store
 
-# Header timestamp per format spec §3.1, e.g. "Sat Jun 27 14:40:48 2026",
-# optionally wrapped in brackets: "[Sat Jun 27 14:40:48 2026]".
+# Header timestamp per spec §3.1, e.g. "Mon Jul 27 18:02:21 2026",
+# optionally wrapped in brackets.
 _TS_FORMAT = "%a %b %d %H:%M:%S %Y"
 _BRACKETS = re.compile(r"^\[(.*)\]$")
 
@@ -42,104 +39,60 @@ class UnitResult:
         return self.read == self.inserted
 
 
-def parse_ts(s: str) -> datetime:
-    original = s
+def parse_ts(s: str) -> datetime | None:
+    """Parse the header timestamp to a DateTime. Returns None (stored as the
+    zero DateTime) if empty or unparseable, so one odd timestamp never fails a
+    whole load — the original string is always kept in the `timestamp` column."""
+    if not s:
+        return None
     s = s.strip()
     m = _BRACKETS.match(s)
     if m:
         s = m.group(1).strip()
-    if not s:
-        # An empty header timestamp on data that decoded "successfully" almost
-        # always means records are being split at the wrong boundaries.
-        raise InputError(
-            "header timestamp is empty — records are likely being read with the "
-            "wrong framing (empty messages decode as all-defaults). Check the "
-            "framing with:  python tools/inspect_pb.py <file.pb>")
     try:
         return datetime.strptime(s, _TS_FORMAT)
-    except ValueError as exc:
-        raise InputError(
-            f"cannot parse header timestamp {original!r} "
-            f"(expected e.g. 'Sat Jun 27 14:40:48 2026'): {exc}") from exc
+    except ValueError:
+        return None
 
 
-def _rows_from_file(pb_path: Path, schema: TableSchema, cls,
-                    run_id: str, loaded_at: datetime, sut_expected: str | None,
-                    column_names: Sequence[str], batch_size: int, store: Store,
-                    framing: str):
-    """Decode one .pb file, emit rows in column order, insert in batches.
-    Returns (read, inserted, sut_id_seen)."""
-    batch: list[tuple] = []
-    read = inserted = 0
-    sut_id = sut_expected
-    payload_fields = schema.payload_fields
-
-    # The framing layer (iter_messages) can raise InputError on an implausible
-    # length, and the parser can raise DecodeError on bad content. A wrong
-    # framing shows up as either, so both route through one diagnosis.
-    records = iter_messages(pb_path, framing)
-    while True:
-        try:
-            raw, offset = next(records)
-        except StopIteration:
-            break
-        except InputError as exc:
-            raise InputError(describe_failure(
-                pb_path, cls, framing, read + 1, str(exc))) from None
-
-        read += 1
-        msg = cls()
-        try:
-            msg.ParseFromString(raw)
-        except DecodeError:
-            # Turn "Wire format was corrupt" into a specific, forwardable
-            # diagnosis (framing mismatch / schema mismatch / bad record).
-            raise InputError(describe_failure(
-                pb_path, cls, framing, read, "protobuf wire format was corrupt",
-                raw=raw)) from None
-
-        host = msg.hostname
-        if sut_id is None:
-            sut_id = host
-        elif host != sut_id:
-            # One run directory is one SUT. A second hostname means misrouted
-            # data — fail rather than write it into the wrong partition.
-            raise InputError(
-                f"{pb_path.name}: record {read} has hostname {host!r} but the "
-                f"run is {sut_id!r} — one run belongs to one SUT"
-            )
-
-        payload = msg.payload
-        row = (
-            run_id, sut_id, parse_ts(msg.timestamp),
-            msg.tag, msg.loglevel, msg.component, loaded_at,
-            *(getattr(payload, f) for f in payload_fields),
-        )
-        batch.append(row)
-        if len(batch) >= batch_size:
-            store.insert(schema.stem, column_names, batch)
-            inserted += len(batch)
-            batch.clear()
-
-    if batch:
-        store.insert(schema.stem, column_names, batch)
-        inserted += len(batch)
-    return read, inserted, sut_id
+_EPOCH = datetime(1970, 1, 1)
 
 
 def load_unit(pb_parts: list[Path], schema: TableSchema, store: Store,
-              run_id: str, batch_size: int, framing: str = "varint") -> UnitResult:
+              run_id: str, batch_size: int) -> UnitResult:
     """Load all .pb parts of one unit into its table via `store`."""
     store.ensure_table(schema)
     loaded_at = datetime.now().replace(microsecond=0)
     column_names = [c.name for c in schema.columns]
+    generic_field = schema.generic_field
+    payload_field = schema.payload_field
+    generic_fields = schema.generic_fields
+    payload_fields = schema.payload_fields
+
     read = inserted = 0
-    sut_id: str | None = None
+    batch: list[tuple] = []
+
     for part in pb_parts:
-        r, i, sut_id = _rows_from_file(
-            part, schema, schema.message_cls, run_id, loaded_at, sut_id,
-            column_names, batch_size, store, framing)
-        read += r
-        inserted += i
+        for rec in iter_records(part, schema):
+            read += 1
+            g = getattr(rec, generic_field)
+            p = getattr(rec, payload_field)
+            ts = parse_ts(g.timestamp) or _EPOCH
+            row = (
+                run_id, ts,
+                *(getattr(g, f) for f in generic_fields),
+                *(getattr(p, f) for f in payload_fields),
+                loaded_at,
+            )
+            batch.append(row)
+            if len(batch) >= batch_size:
+                store.insert(schema.stem, column_names, batch)
+                inserted += len(batch)
+                batch.clear()
+
+    if batch:
+        store.insert(schema.stem, column_names, batch)
+        inserted += len(batch)
+
     return UnitResult(stem=schema.stem, table=schema.stem,
                       files=len(pb_parts), read=read, inserted=inserted)

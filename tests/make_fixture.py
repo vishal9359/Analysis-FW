@@ -1,219 +1,163 @@
 #!/usr/bin/env python3
 """
-Generate a ProfileData-* tree in the NEW naming convention, for testing Module 1.
+Generate a ProfileData-* tree in the wrapper format Profile FW uses.
 
-Layout produced (per Analysis-FW-Module1-MVP-Design.md):
+Each record is a "sample" message = generic_format (GenericFormat header) + a
+payload sub-message. Records are written NOT as delimited messages but inside a
+single wrapper message with a `repeated` field, one wrapper message per .pb file
+(a big run is split into several .pb files, each a complete wrapper message).
 
     ProfileData-<tag>-<timestamp>/
-      Config/run_config.log                 (empty)
+      Config/run_config.log
       Linux/Block/
-        block_type1.proto                   schema
-        block_type1.000.pb                  data, split part 0
-        block_type1.001.pb                  data, split part 1
-        block_type2.proto
-        block_type2.pb                       data, single file
-      Linux/NVMe/
-        nvme_type1.proto
-        nvme_type1.pb
-      SSD/
-        ssd_type1.proto
-        ssd_type1.pb
-
-Every message follows the format contract: header fields 1-5 + nested Payload
-in field 6 (scalars only). Records are varint length-delimited.
+        linux_block_1_stats.proto   linux_block_1_stats.pb
+        linux_block_2_misc.proto    linux_block_2_misc.pb
 
     python make_fixture.py [output_root]
 """
 from __future__ import annotations
 
-import struct
 import sys
 import tempfile
 from pathlib import Path
 
-from grpc_tools import protoc
 import grpc_tools
+from grpc_tools import protoc
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
-
-# Each entry: (relative dir, stem, proto text, record count, split count)
-FIXTURE_PROTOS = {
-    "block_type1": '''
+# Two real-shaped protos: header in GenericFormat, payload in its own message,
+# a per-record "sample" message, and a repeated wrapper. The payload field name
+# differs on purpose (block_device_stat vs blk_bio_queue_payload).
+PROTOS = {
+    "linux_block_1_stats": '''
 syntax = "proto3";
-package fix.block1;
-message Rec {
-  string timestamp = 1;
-  string hostname  = 2;
-  uint32 component = 3;
-  uint32 tag       = 4;
-  uint32 loglevel  = 5;
-  message Payload {
-    uint64 event_seq  = 1;
-    string disk       = 2;
-    string op         = 3;
-    uint32 bytes      = 4;
-    uint64 latency_ns = 5;
-    int32  error      = 6;
-  }
-  Payload payload = 6;
+message BlockDeviceStat {
+  optional string device = 1;
+  optional uint64 read_ios = 2;
+  optional uint64 sectors_read = 3;
+  optional uint64 write_ios = 4;
+  optional uint64 io_time = 5;
+}
+message GenericFormat {
+  optional string timestamp = 1;
+  optional string hostname = 2;
+  optional uint32 component = 3;
+  optional string tag = 4;
+  optional uint32 log_level = 5;
+}
+message BlockStatSample {
+  GenericFormat generic_format = 1;
+  BlockDeviceStat block_device_stat = 2;
+}
+message BlockDeviceStatLog {
+  repeated BlockStatSample block_device_stats = 1;
 }''',
-    "block_type2": '''
+    "linux_block_2_misc": '''
 syntax = "proto3";
-package fix.block2;
-message Rec {
-  string timestamp = 1;
-  string hostname  = 2;
-  uint32 component = 3;
-  uint32 tag       = 4;
-  uint32 loglevel  = 5;
-  message Payload {
-    uint64 event_seq   = 1;
-    uint32 queue_depth = 2;
-    double util_pct    = 3;
-    bool   throttled   = 4;
-  }
-  Payload payload = 6;
-}''',
-    "nvme_type1": '''
-syntax = "proto3";
-package fix.nvme1;
-message Rec {
-  string timestamp = 1;
-  string hostname  = 2;
-  uint32 component = 3;
-  uint32 tag       = 4;
-  uint32 loglevel  = 5;
-  message Payload {
-    uint64 event_seq = 1;
-    uint32 qid       = 2;
-    uint32 cid       = 3;
-    uint64 slba      = 4;
-  }
-  Payload payload = 6;
-}''',
-    "ssd_type1": '''
-syntax = "proto3";
-package fix.ssd1;
-message Rec {
-  string timestamp = 1;
-  string hostname  = 2;
-  uint32 component = 3;
-  uint32 tag       = 4;
-  uint32 loglevel  = 5;
-  message Payload {
-    uint64 event_seq      = 1;
-    float  temperature_c  = 2;
-    uint64 power_on_hours = 3;
-  }
-  Payload payload = 6;
+message GenericFormat {
+  optional string timestamp = 1;
+  optional string hostname = 2;
+  optional uint32 component = 3;
+  optional string tag = 4;
+  optional uint32 log_level = 5;
+}
+message BlkBioQueuePayload {
+  optional uint64 read_splits = 6;
+  optional uint64 read_4kb = 7;
+  optional uint64 write_4kb = 8;
+  optional uint64 read_bios = 9;
+  optional uint64 write_bios = 10;
+}
+message BlkBioQueueEvent {
+  GenericFormat generic_format = 1;
+  BlkBioQueuePayload blk_bio_queue_payload = 2;
+}
+message BlkBioQueueEvents {
+  repeated BlkBioQueueEvent blk_bio_queue_events = 1;
 }''',
 }
 
-# stem -> (dir, component_id, record_count, split_count)
+# stem -> (subdir, component, wrapper msg, repeated field, record msg,
+#          payload field, record count, split count)
 PLACEMENT = {
-    "block_type1": ("Linux/Block", 1, 1000, 2),
-    "block_type2": ("Linux/Block", 1, 400, 1),
-    "nvme_type1":  ("Linux/NVMe", 2, 600, 1),
-    "ssd_type1":   ("SSD", 6, 50, 1),
+    "linux_block_1_stats": ("Linux/Block", 1, "BlockDeviceStatLog",
+                            "block_device_stats", "BlockStatSample",
+                            "block_device_stat", 1000, 2),
+    "linux_block_2_misc": ("Linux/Block", 1, "BlkBioQueueEvents",
+                           "blk_bio_queue_events", "BlkBioQueueEvent",
+                           "blk_bio_queue_payload", 400, 1),
 }
 
-TS = "Sat Jun 27 14:40:48 2026"
-HOSTNAME = "dgx-spark-01"
-TAG = 7
+HOSTNAME = "spark-e97e"
+TAG = "test1"
 
 
-def build_class(stem: str, text: str):
+def classes(text: str):
     tmp = Path(tempfile.mkdtemp())
-    (tmp / f"{stem}.proto").write_text(text)
+    (tmp / "s.proto").write_text(text)
     inc = Path(grpc_tools.__file__).parent / "_proto"
     out = tmp / "d.desc"
-    rc = protoc.main(["protoc", f"-I{tmp}", f"-I{inc}",
-                      f"--descriptor_set_out={out}", "--include_imports",
-                      str(tmp / f"{stem}.proto")])
-    if rc != 0:
-        raise SystemExit(f"protoc failed for {stem}")
+    if protoc.main(["protoc", f"-I{tmp}", f"-I{inc}",
+                    f"--descriptor_set_out={out}", "--include_imports",
+                    str(tmp / "s.proto")]) != 0:
+        raise SystemExit("protoc failed")
     pool = descriptor_pool.DescriptorPool()
     fds = descriptor_pb2.FileDescriptorSet()
     fds.ParseFromString(out.read_bytes())
     for f in fds.file:
         pool.Add(f)
-    # find the one top-level message
-    name = [m.name for f in fds.file for m in f.message_type][0]
-    pkg = fds.file[0].package
-    return message_factory.GetMessageClass(pool.FindMessageTypeByName(f"{pkg}.{name}")), text
+
+    def cls(name):
+        return message_factory.GetMessageClass(pool.FindMessageTypeByName(name))
+    return cls
 
 
-def make_records(cls, component: int, n: int) -> list[bytes]:
-    out = []
+def make_wrapper(cls, wrapper_name, repeated_field, record_name, payload_field,
+                 component, n):
+    wrapper = cls(wrapper_name)()
+    records = getattr(wrapper, repeated_field)
     for i in range(1, n + 1):
-        m = cls()
-        m.timestamp = TS
-        m.hostname = HOSTNAME
-        m.component = component
-        m.tag = TAG
-        m.loglevel = 3
-        p = m.payload
-        # set whatever scalar payload fields exist, generically
+        rec = records.add()
+        g = rec.generic_format
+        g.timestamp = "Mon Jul 27 18:02:21 2026"
+        g.hostname = HOSTNAME
+        g.component = component
+        g.tag = TAG
+        g.log_level = 3
+        p = getattr(rec, payload_field)
         for f in p.DESCRIPTOR.fields:
-            if f.name == "event_seq":
-                setattr(p, f.name, i)
-            elif f.cpp_type in (f.CPPTYPE_INT32, f.CPPTYPE_INT64,
-                                f.CPPTYPE_UINT32, f.CPPTYPE_UINT64):
-                setattr(p, f.name, (i * 7) % 1000)
-            elif f.cpp_type in (f.CPPTYPE_FLOAT, f.CPPTYPE_DOUBLE):
-                setattr(p, f.name, float(i % 100) + 0.5)
-            elif f.cpp_type == f.CPPTYPE_BOOL:
-                setattr(p, f.name, i % 2 == 0)
-            elif f.cpp_type == f.CPPTYPE_STRING:
-                setattr(p, f.name, ["read", "write", "flush"][i % 3])
-        out.append(m.SerializeToString())
-    return out
-
-
-def varint(n: int) -> bytes:
-    out = bytearray()
-    while True:
-        b = n & 0x7F
-        n >>= 7
-        if n:
-            out.append(b | 0x80)
-        else:
-            out.append(b)
-            return bytes(out)
-
-
-def write_split(path_stem: Path, blobs: list[bytes], splits: int) -> None:
-    """Write blobs across `splits` .pb files, framed varint-delimited."""
-    if splits == 1:
-        with open(f"{path_stem}.pb", "wb") as fh:
-            for b in blobs:
-                fh.write(varint(len(b)) + b)
-        return
-    per = (len(blobs) + splits - 1) // splits
-    for idx in range(splits):
-        chunk = blobs[idx * per:(idx + 1) * per]
-        with open(f"{path_stem}.{idx:03d}.pb", "wb") as fh:
-            for b in chunk:
-                fh.write(varint(len(b)) + b)
+            if f.cpp_type == f.CPPTYPE_STRING:
+                setattr(p, f.name, "nvme0n1")
+            else:
+                setattr(p, f.name, (i * 7) % 100000)
+    return wrapper
 
 
 def main() -> None:
     root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("./fixture_out")
-    run_dir = root / "ProfileData-fixture-20260627-144048"
+    run_dir = root / "ProfileData-fixture-20260727-180221"
     (run_dir / "Config").mkdir(parents=True, exist_ok=True)
     (run_dir / "Config" / "run_config.log").touch()
 
     total = 0
-    for stem, text in FIXTURE_PROTOS.items():
-        subdir, component, n, splits = PLACEMENT[stem]
+    for stem, text in PROTOS.items():
+        subdir, comp, wname, rfield, rname, pfield, n, splits = PLACEMENT[stem]
+        cls = classes(text)
         d = run_dir / subdir
         d.mkdir(parents=True, exist_ok=True)
-        cls, proto_text = build_class(stem, text)
-        (d / f"{stem}.proto").write_text(proto_text)
-        blobs = make_records(cls, component, n)
-        write_split(d / stem, blobs, splits)
+        (d / f"{stem}.proto").write_text(text)
+
+        # split the n records into `splits` wrapper messages, one per .pb file
+        per = (n + splits - 1) // splits
+        for idx in range(splits):
+            lo, hi = idx * per, min((idx + 1) * per, n)
+            if lo >= hi:
+                continue
+            wrapper = make_wrapper(cls, wname, rfield, rname, pfield, comp, hi - lo)
+            name = f"{stem}.pb" if splits == 1 else f"{stem}.{idx:03d}.pb"
+            (d / name).write_bytes(wrapper.SerializeToString())
         total += n
-        print(f"  {subdir}/{stem}: {n} records, {splits} file(s)")
+        print(f"  {subdir}/{stem}: {n} records, {splits} wrapper file(s)")
 
     print(f"\n{total} records total -> {run_dir}")
 

@@ -1,0 +1,23 @@
+
+syntax = "proto3";
+message BlockDeviceStat {
+  optional string device = 1;
+  optional uint64 read_ios = 2;
+  optional uint64 sectors_read = 3;
+  optional uint64 write_ios = 4;
+  optional uint64 io_time = 5;
+}
+message GenericFormat {
+  optional string timestamp = 1;
+  optional string hostname = 2;
+  optional uint32 component = 3;
+  optional string tag = 4;
+  optional uint32 log_level = 5;
+}
+message BlockStatSample {
+  GenericFormat generic_format = 1;
+  BlockDeviceStat block_device_stat = 2;
+}
+message BlockDeviceStatLog {
+  repeated BlockStatSample block_device_stats = 1;
+}

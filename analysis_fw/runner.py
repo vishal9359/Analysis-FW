@@ -66,14 +66,13 @@ class _Job:
     stem: str
     pb_parts: list[str]
     descriptor_bytes: bytes
-    message_full_name: str
+    source: str            # proto filename, so the child finds the primary file
     run_id: str
     host: str
     port: int
     database: str
     batch_size: int
     async_insert: bool
-    framing: str
 
 
 def _run_job(job: _Job) -> UnitResult:
@@ -81,12 +80,12 @@ def _run_job(job: _Job) -> UnitResult:
     descriptor bytes and paths — because message classes and live connections
     cannot be pickled."""
     schema = build_schema_from_descriptor(
-        job.stem, job.descriptor_bytes, job.message_full_name, source=job.stem)
+        job.stem, job.descriptor_bytes, source=job.source)
     store = ClickHouseStore(job.host, job.port, job.database, job.async_insert)
     store.connect()
     try:
         return load_unit([Path(p) for p in job.pb_parts], schema, store,
-                         job.run_id, job.batch_size, job.framing)
+                         job.run_id, job.batch_size)
     finally:
         store.close()
 
@@ -116,7 +115,7 @@ def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadRe
             for u in units:
                 report.units.append(
                     load_unit(u.pb_parts, schemas[u.stem], st, run_id,
-                              cfg.store.batch_size, cfg.framing))
+                              cfg.store.batch_size))
         finally:
             if own:
                 st.close()
@@ -126,10 +125,10 @@ def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadRe
     jobs = [
         _Job(stem=u.stem, pb_parts=[str(p) for p in u.pb_parts],
              descriptor_bytes=schemas[u.stem].descriptor_bytes,
-             message_full_name=schemas[u.stem].message_full_name,
+             source=u.proto_path.name,
              run_id=run_id, host=cfg.store.host, port=cfg.store.port,
              database=cfg.store.database, batch_size=cfg.store.batch_size,
-             async_insert=cfg.store.async_insert, framing=cfg.framing)
+             async_insert=cfg.store.async_insert)
         for u in units
     ]
     workers = min(cfg.store.workers, len(jobs))
