@@ -16,7 +16,7 @@ message GenericFormat {
 }
 message BlockStatSample {
   GenericFormat generic_format = 1;
-  BlockDeviceStat block_device_stat = 2;
+  BlockDeviceStat payload = 2;
 }
 message BlockDeviceStatLog {
   repeated BlockStatSample block_device_stats = 1;

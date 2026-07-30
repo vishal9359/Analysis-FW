@@ -60,14 +60,22 @@ def test_detects_record_generic_payload_wrapper():
     assert s.record_cls.DESCRIPTOR.name == "BlockStatSample"
     assert s.wrapper_cls.DESCRIPTOR.name == "BlockDeviceStatLog"
     assert s.repeated_field == "block_device_stats"
-    assert s.generic_field == "generic_format"
-    assert s.payload_field == "block_device_stat"     # not "payload" — found by type
+    assert s.generic_field == "generic_format"      # agreed contract name
+    assert s.payload_field == "payload"             # agreed contract name
 
 
-def test_payload_field_name_varies_but_detected():
-    # block_2's payload field is named differently; detection must not hardcode it
-    s = build_schema("linux_block_2_misc", _units()["linux_block_2_misc"].proto_path)
-    assert s.payload_field == "blk_bio_queue_payload"
+def test_contract_names_enforced():
+    """A record whose payload field is not named `payload` is rejected."""
+    d = Path(tempfile.mkdtemp())
+    p = d / "x.proto"
+    p.write_text('''syntax="proto3";
+message GenericFormat { optional string timestamp=1; optional string hostname=2;
+  optional uint32 component=3; optional string tag=4; optional uint32 log_level=5; }
+message P { optional uint64 m=1; }
+message Rec { GenericFormat generic_format=1; P blk_payload=2; }
+message Log { repeated Rec rows=1; }''')
+    with pytest.raises(SchemaError, match="no 'payload' field|requires both"):
+        build_schema("x", p)
 
 
 def test_flat_columns_and_types():

@@ -16,7 +16,7 @@ message BlkBioQueuePayload {
 }
 message BlkBioQueueEvent {
   GenericFormat generic_format = 1;
-  BlkBioQueuePayload blk_bio_queue_payload = 2;
+  BlkBioQueuePayload payload = 2;
 }
 message BlkBioQueueEvents {
   repeated BlkBioQueueEvent blk_bio_queue_events = 1;

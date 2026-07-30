@@ -26,8 +26,8 @@ from grpc_tools import protoc
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
 # Two real-shaped protos: header in GenericFormat, payload in its own message,
-# a per-record "sample" message, and a repeated wrapper. The payload field name
-# differs on purpose (block_device_stat vs blk_bio_queue_payload).
+# a per-record "sample" message (fields named generic_format + payload, per the
+# agreed contract), and a repeated wrapper.
 PROTOS = {
     "linux_block_1_stats": '''
 syntax = "proto3";
@@ -47,7 +47,7 @@ message GenericFormat {
 }
 message BlockStatSample {
   GenericFormat generic_format = 1;
-  BlockDeviceStat block_device_stat = 2;
+  BlockDeviceStat payload = 2;
 }
 message BlockDeviceStatLog {
   repeated BlockStatSample block_device_stats = 1;
@@ -70,7 +70,7 @@ message BlkBioQueuePayload {
 }
 message BlkBioQueueEvent {
   GenericFormat generic_format = 1;
-  BlkBioQueuePayload blk_bio_queue_payload = 2;
+  BlkBioQueuePayload payload = 2;
 }
 message BlkBioQueueEvents {
   repeated BlkBioQueueEvent blk_bio_queue_events = 1;
@@ -82,10 +82,10 @@ message BlkBioQueueEvents {
 PLACEMENT = {
     "linux_block_1_stats": ("Linux/Block", 1, "BlockDeviceStatLog",
                             "block_device_stats", "BlockStatSample",
-                            "block_device_stat", 1000, 2),
+                            "payload", 1000, 2),
     "linux_block_2_misc": ("Linux/Block", 1, "BlkBioQueueEvents",
                            "blk_bio_queue_events", "BlkBioQueueEvent",
-                           "blk_bio_queue_payload", 400, 1),
+                           "payload", 400, 1),
 }
 
 HOSTNAME = "spark-e97e"

@@ -27,7 +27,13 @@ from google.protobuf.descriptor import FieldDescriptor as FD
 
 from .errors import SchemaError
 
-GENERIC_MESSAGE = "GenericFormat"   # the type that marks a record and holds the header
+# Agreed contract with Profile FW: the record message has a singular message
+# field named `generic_format` (the header, of type GenericFormat) and a
+# singular message field named `payload` (the layer data). Both names are
+# required; a .proto that does not follow this is rejected.
+GENERIC_FIELD = "generic_format"
+PAYLOAD_FIELD = "payload"
+GENERIC_MESSAGE = "GenericFormat"
 
 # protobuf field type -> ClickHouse type
 _PROTO_TO_CH = {
@@ -84,38 +90,51 @@ def _scalar_columns(msg_desc, source: str) -> tuple[list[str], list[Column]]:
 
 
 def _detect(pool, primary_file, source: str):
-    """Find the record message (has a singular GenericFormat field) and, if
-    present, the wrapper message (has a `repeated <record>` field)."""
+    """Find the record message and, if present, the wrapper message.
+
+    The record message is identified by the agreed field NAMES: it has a
+    singular message field named `generic_format` (header) and a singular
+    message field named `payload` (data). Both are required; anything else is
+    a contract violation and is rejected with a clear error.
+    """
     messages = {m.name: pool.FindMessageTypeByName(
         f"{primary_file.package + '.' if primary_file.package else ''}{m.name}")
         for m in primary_file.message_type}
 
     record_desc = generic_field = payload_field = None
     for desc in messages.values():
-        gfield = pfield = None
-        for f in desc.fields:
-            if f.type != FD.TYPE_MESSAGE or f.is_repeated:
-                continue
-            if f.message_type.name == GENERIC_MESSAGE:
-                gfield = f
-            else:
-                pfield = f
-        if gfield is not None:
-            if record_desc is not None:
-                raise SchemaError(
-                    f"{source}: more than one record message (both "
-                    f"{record_desc.name} and {desc.name} have a {GENERIC_MESSAGE} "
-                    f"field); expected exactly one")
-            if pfield is None:
-                raise SchemaError(f"{source}: record {desc.name} has a "
-                                  f"{GENERIC_MESSAGE} field but no payload message")
-            record_desc, generic_field, payload_field = desc, gfield, pfield
+        by_name = {f.name: f for f in desc.fields}
+        g = by_name.get(GENERIC_FIELD)
+        if g is None:
+            continue   # not a record message
+
+        # this message carries `generic_format`, so it must be a valid record
+        if g.type != FD.TYPE_MESSAGE or g.is_repeated:
+            raise SchemaError(f"{source}: {desc.name}.{GENERIC_FIELD} must be a "
+                              f"singular message field")
+        if g.message_type.name != GENERIC_MESSAGE:
+            raise SchemaError(f"{source}: {desc.name}.{GENERIC_FIELD} must be of "
+                              f"type {GENERIC_MESSAGE}, got {g.message_type.name}")
+        p = by_name.get(PAYLOAD_FIELD)
+        if p is None:
+            raise SchemaError(
+                f"{source}: record message {desc.name} has '{GENERIC_FIELD}' but "
+                f"no '{PAYLOAD_FIELD}' field. The contract requires both a "
+                f"'{GENERIC_FIELD}' and a '{PAYLOAD_FIELD}' message field.")
+        if p.type != FD.TYPE_MESSAGE or p.is_repeated:
+            raise SchemaError(f"{source}: {desc.name}.{PAYLOAD_FIELD} must be a "
+                              f"singular message field")
+        if record_desc is not None:
+            raise SchemaError(
+                f"{source}: more than one record message (both {record_desc.name} "
+                f"and {desc.name} have a '{GENERIC_FIELD}' field); expected one")
+        record_desc, generic_field, payload_field = desc, g, p
 
     if record_desc is None:
         raise SchemaError(
-            f"{source}: no record message found — expected a message with a "
-            f"singular '{GENERIC_MESSAGE}' field (the header) plus a payload "
-            f"message. Does the .proto follow the generic_format convention?")
+            f"{source}: no record message found. The contract requires a message "
+            f"with a '{GENERIC_FIELD}' field (header) and a '{PAYLOAD_FIELD}' "
+            f"field (data).")
 
     # wrapper = a message with a `repeated <record>` field
     wrapper_desc = repeated_field = None
