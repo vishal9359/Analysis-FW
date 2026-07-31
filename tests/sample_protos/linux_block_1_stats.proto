@@ -1,6 +1,14 @@
 syntax = "proto3";
 
-message BlockDeviceStat {
+message GenericFormat {
+    optional string timestamp = 1;
+    optional string hostname = 2;
+    optional uint32 component = 3;
+    optional string tag = 4;
+    optional uint32 log_level = 5;
+}
+
+message Payload {
     optional string device = 1;
 
     optional uint64 read_ios = 2;
@@ -26,19 +34,11 @@ message BlockDeviceStat {
     optional uint64 flush_time_ms = 18;
 }
 
-message GenericFormat {
-    optional string timestamp = 1;
-    optional string hostname = 2;
-    optional uint32 component = 3;
-    optional string tag = 4;
-    optional uint32 log_level = 5;
-}
-
-message BlockStatSample {
+message StatLog {
     GenericFormat generic_format = 1;
-    BlockDeviceStat payload = 2;
+    Payload payload = 2;
 }
 
-message BlockDeviceStatLog {
-    repeated BlockStatSample block_device_stats = 1;
+message StatLogs {
+    repeated StatLog stat_logs = 1;
 }

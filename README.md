@@ -40,24 +40,27 @@ Each layer folder holds one or more **types**, each a `.proto` + its `.pb` data:
 <layer>_<type>.<NNN>.pb     data, split parts in order 000, 001, …
 ```
 
-Each `.proto` follows the **generic_format convention**:
+Each `.proto` follows the agreed **standard shape**:
 
 ```proto
 message GenericFormat { string timestamp; string hostname; uint32 component;
-                        string tag; uint32 log_level; }         // the header
-message <Payload>     { ... layer-specific scalar fields ... }  // the data
-message <Record>      { GenericFormat generic_format = 1;       // one row
-                        <Payload> <name> = 2; }
-message <Wrapper>     { repeated <Record> <name> = 1; }         // a .pb file
+                        string tag; uint32 log_level; }      // the header
+message Payload       { ... layer-specific scalar fields ... }  // the data
+message StatLog       { GenericFormat generic_format = 1;     // one row
+                        Payload payload = 2; }
+message StatLogs      { repeated StatLog stat_logs = 1; }     // a .pb file
 ```
 
-- A `.pb` file **is one `<Wrapper>` message** holding a `repeated` list of records.
+- A `.pb` file **is one `StatLogs` message** holding a `repeated` list of records.
   Protobuf's repeated encoding delimits the records internally — **no framing /
   length prefix**. A big run is split into several `.pb` files, each a complete
   wrapper message.
-- The loader finds the record/header/payload/wrapper **by structure** (the record
-  is the message with a `GenericFormat` field), not by names — so a renamed
-  payload field or a new layer needs no code change.
+- The loader finds record/header/payload/wrapper **by structure** — the record is
+  the message with a `generic_format` field and a `payload` field; the wrapper is
+  the message with `repeated <record>`. It does **not** depend on the message
+  names, so all protos may reuse `StatLog`/`StatLogs`/`Payload` (each `.proto` is
+  compiled in its own descriptor pool, so identical names never collide). Adding
+  a field or a new layer needs no code change.
 - **Table = file stem** (`linux_block_1_stats`). Each type → its own table.
 - Each row is flattened: `run_id`, `ts` (parsed from `timestamp`), the generic
   fields, the payload fields, `_loaded_at`.

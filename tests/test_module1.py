@@ -57,9 +57,10 @@ def test_discover_finds_units_and_splits():
 
 def test_detects_record_generic_payload_wrapper():
     s = build_schema("linux_block_1_stats", _units()["linux_block_1_stats"].proto_path)
-    assert s.record_cls.DESCRIPTOR.name == "BlockStatSample"
-    assert s.wrapper_cls.DESCRIPTOR.name == "BlockDeviceStatLog"
-    assert s.repeated_field == "block_device_stats"
+    # standardized message names (agreed contract): StatLog / StatLogs
+    assert s.record_cls.DESCRIPTOR.name == "StatLog"
+    assert s.wrapper_cls.DESCRIPTOR.name == "StatLogs"
+    assert s.repeated_field == "stat_logs"
     assert s.generic_field == "generic_format"      # agreed contract name
     assert s.payload_field == "payload"             # agreed contract name
 

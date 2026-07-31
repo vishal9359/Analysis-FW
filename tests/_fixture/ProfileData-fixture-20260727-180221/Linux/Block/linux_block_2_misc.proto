@@ -8,7 +8,7 @@ message GenericFormat {
     optional uint32 log_level = 5;
 }
 
-message BlkBioQueuePayload {
+message Payload {
     optional uint64 read_splits = 6;
     optional uint64 write_splits = 7;
 
@@ -40,11 +40,11 @@ message BlkBioQueuePayload {
     optional uint64 write_bios = 31;
 }
 
-message BlkBioQueueEvent {
+message StatLog {
     GenericFormat generic_format = 1;
-    BlkBioQueuePayload payload = 2;
+    Payload payload = 2;
 }
 
-message BlkBioQueueEvents {
-    repeated BlkBioQueueEvent blk_bio_queue_events = 1;
+message StatLogs {
+    repeated StatLog stat_logs = 1;
 }
