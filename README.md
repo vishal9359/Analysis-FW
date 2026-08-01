@@ -66,6 +66,30 @@ message StatLogs      { repeated StatLog stat_logs = 1; }     // a .pb file
   fields, the payload fields, `_loaded_at`.
 - `Config/` is ignored.
 
+### Repeated sub-messages → child tables
+
+If a `Payload` contains `repeated <Message>` fields (e.g. NVMe `per_queue`,
+`per_core`), each becomes its **own child table** `<stem>_<field>`:
+
+```proto
+message Payload {
+  ... scalar fields ...            // -> main table linux_nvme_1_stats
+  repeated NvmeQueueStat per_queue = 25;   // -> linux_nvme_1_stats_per_queue
+  repeated NvmeCoreStat  per_core  = 26;   // -> linux_nvme_1_stats_per_core
+}
+```
+
+- One record → **1 main row + N per_queue rows + M per_core rows** (additive,
+  never N×M). A `record_id` (UInt64 sequence per record) links them:
+  `main JOIN child USING (run_id, record_id)`.
+- Child tables carry the full header + `record_id` + their own fields, and are
+  ordered by their key dimension (`queue_id` / `cpu_id`) for fast filtering.
+- Scalar-only payloads (e.g. block) get **no** `record_id` and no child tables —
+  unchanged.
+- *`record_id` is a per-load sequence for now; a multi-node-safe scheme
+  (Snowflake/UUIDv7) is deferred to the streaming re-architecture, along with
+  multi-node `run_id` generation.*
+
 ## What it does
 
 `discover → build schema → create tables → load (parallel) → reconcile → JSON report`

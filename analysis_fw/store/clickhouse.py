@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Sequence
 
 from ..errors import DatabaseError
-from ..registry import TableSchema, create_table_ddl
+from ..registry import Column, create_table_ddl
 
 
 class ClickHouseStore:
@@ -45,11 +45,13 @@ class ClickHouseStore:
                 f"cannot connect to ClickHouse at {self.host}:{self.port} - {exc}"
             ) from exc
 
-    def ensure_table(self, schema: TableSchema) -> None:
+    def ensure_table(self, table: str, columns: Sequence[Column],
+                     order_by: Sequence[str]) -> None:
         try:
-            self._client.command(create_table_ddl(self.database, schema))
+            self._client.command(
+                create_table_ddl(self.database, table, list(columns), list(order_by)))
         except Exception as exc:
-            raise DatabaseError(f"failed creating table {schema.stem}: {exc}") from exc
+            raise DatabaseError(f"failed creating table {table}: {exc}") from exc
 
     def insert(self, table: str, columns: Sequence[str],
                rows: Sequence[Sequence]) -> None:

@@ -34,12 +34,12 @@ class LoadReport:
     status: str = "complete"
 
     @property
-    def read(self) -> int:
-        return sum(u.read for u in self.units)
+    def records(self) -> int:
+        return sum(u.records for u in self.units)
 
     @property
-    def inserted(self) -> int:
-        return sum(u.inserted for u in self.units)
+    def rows(self) -> int:
+        return sum(u.total_rows for u in self.units)
 
     def to_dict(self) -> dict:
         return {
@@ -47,11 +47,11 @@ class LoadReport:
             "run_id": self.run_id,
             "producer": self.producer,
             "database": self.database,
-            "totals": {"read": self.read, "inserted": self.inserted,
+            "totals": {"records": self.records, "rows": self.rows,
                        "units": len(self.units)},
             "units": [
-                {"table": u.table, "files": u.files,
-                 "read": u.read, "inserted": u.inserted, "ok": u.ok}
+                {"stem": u.stem, "files": u.files, "records": u.records,
+                 "tables": u.table_rows, "ok": u.ok}
                 for u in self.units
             ],
         }

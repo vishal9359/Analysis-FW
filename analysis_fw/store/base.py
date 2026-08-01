@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Protocol, Sequence, runtime_checkable
 
-from ..registry import TableSchema
+from ..registry import Column
 
 
 @runtime_checkable
@@ -15,8 +15,10 @@ class Store(Protocol):
     def connect(self) -> None:
         """Open the connection and ensure the target database exists."""
 
-    def ensure_table(self, schema: TableSchema) -> None:
-        """Create the table for this schema if it does not exist."""
+    def ensure_table(self, table: str, columns: Sequence[Column],
+                     order_by: Sequence[str]) -> None:
+        """Create the table (if absent) with these columns and ORDER BY.
+        Called once per table — main and each child table."""
 
     def insert(self, table: str, columns: Sequence[str],
                rows: Sequence[Sequence]) -> None:

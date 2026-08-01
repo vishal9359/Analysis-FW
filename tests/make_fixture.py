@@ -28,7 +28,8 @@ DEFAULT_PROTOS = HERE / "sample_protos"
 
 # How many records per unit, and how many .pb files to split it across.
 # (Splitting one keeps the multi-file path exercised.)
-COUNTS = {"linux_block_1_stats": (1000, 2), "linux_block_2_misc": (400, 1)}
+COUNTS = {"linux_block_1_stats": (1000, 2), "linux_block_2_misc": (400, 1),
+          "linux_nvme_1_stats": (300, 1)}
 DEFAULT_COUNT, DEFAULT_SPLITS = 200, 1
 
 # Layer subdir from the filename's layer token.
@@ -65,8 +66,20 @@ def _set_scalar(msg, field, i: int) -> None:
         setattr(msg, field.name, (i * 7) % 1_000_000)
 
 
+def _sub_count(field_name: str, i: int) -> int:
+    """A varying, record-dependent number of sub-elements, so per_queue and
+    per_core counts differ per record and are independent of each other."""
+    if "queue" in field_name:
+        return 3 + (i % 4)      # 3..6 queues
+    if "core" in field_name or "cpu" in field_name:
+        return 8 + (i % 5)      # 8..12 cores
+    return 2 + (i % 3)
+
+
 def make_wrapper(schema, count: int):
-    """Build one wrapper message with `count` fully-populated records."""
+    """Build one wrapper message with `count` fully-populated records, including
+    repeated sub-messages (per_queue / per_core) at varying counts."""
+    from google.protobuf.descriptor import FieldDescriptor as FD
     wrapper = schema.wrapper_cls()
     records = getattr(wrapper, schema.repeated_field)
     for i in range(1, count + 1):
@@ -78,8 +91,16 @@ def make_wrapper(schema, count: int):
         g.tag = TAG
         g.log_level = 3
         p = getattr(rec, schema.payload_field)
-        for f in p.DESCRIPTOR.fields:      # EVERY payload field, whatever they are
-            _set_scalar(p, f, i)
+        for f in p.DESCRIPTOR.fields:
+            if f.is_repeated and f.type == FD.TYPE_MESSAGE:
+                rep = getattr(p, f.name)
+                for k in range(_sub_count(f.name, i)):
+                    sub = rep.add()
+                    for j, sf in enumerate(sub.DESCRIPTOR.fields):
+                        # first field is the key dimension (queue_id / cpu_id)
+                        _set_scalar(sub, sf, k if j == 0 else i + k)
+            elif not f.is_repeated and f.type != FD.TYPE_MESSAGE:
+                _set_scalar(p, f, i)
     return wrapper
 
 

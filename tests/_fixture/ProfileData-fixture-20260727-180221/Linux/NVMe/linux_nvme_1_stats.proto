@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+message GenericFormat {
+    optional string timestamp = 1;
+    optional string hostname = 2;
+    optional uint32 component = 3;
+    optional string tag = 4;
+    optional uint32 log_level = 5;
+}
+
+message NvmeQueueStat {
+    optional uint32 queue_id = 1;
+    optional uint64 read_ios = 2;
+    optional uint64 write_ios = 3;
+}
+
+message NvmeCoreStat {
+    optional uint32 cpu_id = 1;
+    optional uint64 read_ios = 2;
+    optional uint64 write_ios = 3;
+}
+
+message Payload {
+    // device-level scalar fields (a few standing in for the real ~24)
+    optional string device = 1;
+    optional uint64 read_ios = 2;
+    optional uint64 write_ios = 3;
+    optional uint64 io_time = 4;
+
+    // repeated sub-messages -> their own child tables; counts vary per record
+    repeated NvmeQueueStat per_queue = 25;
+    repeated NvmeCoreStat  per_core  = 26;
+}
+
+message StatLog {
+    GenericFormat generic_format = 1;
+    Payload payload = 2;
+}
+
+message StatLogs {
+    repeated StatLog stat_logs = 1;
+}

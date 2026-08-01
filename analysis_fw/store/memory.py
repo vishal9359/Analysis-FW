@@ -3,22 +3,26 @@ tests without a database. Not for production use.
 """
 from __future__ import annotations
 
-from ..registry import TableSchema
 from typing import Sequence
+
+from ..registry import Column
 
 
 class MemoryStore:
     def __init__(self) -> None:
         self.tables: dict[str, list[tuple]] = {}
-        self.schemas: dict[str, TableSchema] = {}
+        self.columns: dict[str, list[Column]] = {}   # table -> columns
+        self.order_by: dict[str, list[str]] = {}
         self.connected = False
 
     def connect(self) -> None:
         self.connected = True
 
-    def ensure_table(self, schema: TableSchema) -> None:
-        self.schemas[schema.stem] = schema
-        self.tables.setdefault(schema.stem, [])
+    def ensure_table(self, table: str, columns: Sequence[Column],
+                     order_by: Sequence[str]) -> None:
+        self.columns[table] = list(columns)
+        self.order_by[table] = list(order_by)
+        self.tables.setdefault(table, [])
 
     def insert(self, table: str, columns: Sequence[str],
                rows: Sequence[Sequence]) -> None:

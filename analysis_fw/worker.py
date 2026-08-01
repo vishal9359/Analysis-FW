@@ -49,14 +49,18 @@ _DT_MAX = datetime(2106, 2, 7, tzinfo=_UTC)
 @dataclass
 class UnitResult:
     stem: str
-    table: str
     files: int
-    read: int
-    inserted: int
+    records: int                    # parent records read
+    table_rows: dict                # table name -> rows inserted (main + children)
 
     @property
     def ok(self) -> bool:
-        return self.read == self.inserted
+        # reconcile: the main table got exactly one row per parent record
+        return self.table_rows.get(self.stem, 0) == self.records
+
+    @property
+    def total_rows(self) -> int:
+        return sum(self.table_rows.values())
 
 
 def parse_ts(s: str) -> datetime | None:
@@ -98,38 +102,75 @@ def ts_for_db(s: str) -> datetime:
 
 def load_unit(pb_parts: list[Path], schema: TableSchema, store: Store,
               run_id: str, batch_size: int) -> UnitResult:
-    """Load all .pb parts of one unit into its table via `store`."""
-    store.ensure_table(schema)
+    """Load one unit into its main table plus a child table per repeated payload
+    sub-message. A `record_id` (UInt64 sequence, per record) links a main row to
+    its child rows."""
+    store.ensure_table(schema.stem, schema.columns, schema.order_by)
+    for ch in schema.children:
+        store.ensure_table(ch.table, ch.columns, ch.order_by)
+
     loaded_at = datetime.now().replace(microsecond=0)
-    column_names = [c.name for c in schema.columns]
     generic_field = schema.generic_field
     payload_field = schema.payload_field
     generic_fields = schema.generic_fields
     payload_fields = schema.payload_fields
+    has_rid = schema.has_record_id
+    children = schema.children
 
-    read = inserted = 0
-    batch: list[tuple] = []
+    main_cols = [c.name for c in schema.columns]
+    child_cols = {ch.table: [c.name for c in ch.columns] for ch in children}
 
+    table_rows: dict[str, int] = {schema.stem: 0}
+    for ch in children:
+        table_rows[ch.table] = 0
+    main_batch: list[tuple] = []
+    child_batches: dict[str, list[tuple]] = {ch.table: [] for ch in children}
+
+    def flush_main():
+        if main_batch:
+            store.insert(schema.stem, main_cols, main_batch)
+            table_rows[schema.stem] += len(main_batch)
+            main_batch.clear()
+
+    def flush_child(ch: "object"):
+        b = child_batches[ch.table]
+        if b:
+            store.insert(ch.table, child_cols[ch.table], b)
+            table_rows[ch.table] += len(b)
+            b.clear()
+
+    records = 0
+    record_id = 0
     for part in pb_parts:
         for rec in iter_records(part, schema):
-            read += 1
+            records += 1
             g = getattr(rec, generic_field)
             p = getattr(rec, payload_field)
-            row = (
-                run_id, ts_for_db(g.timestamp),
-                *(getattr(g, f) for f in generic_fields),
-                *(getattr(p, f) for f in payload_fields),
-                loaded_at,
-            )
-            batch.append(row)
-            if len(batch) >= batch_size:
-                store.insert(schema.stem, column_names, batch)
-                inserted += len(batch)
-                batch.clear()
+            ts = ts_for_db(g.timestamp)
+            gen_vals = tuple(getattr(g, f) for f in generic_fields)
 
-    if batch:
-        store.insert(schema.stem, column_names, batch)
-        inserted += len(batch)
+            if has_rid:
+                main_batch.append((run_id, ts, record_id, *gen_vals,
+                                   *(getattr(p, f) for f in payload_fields), loaded_at))
+            else:
+                main_batch.append((run_id, ts, *gen_vals,
+                                   *(getattr(p, f) for f in payload_fields), loaded_at))
 
-    return UnitResult(stem=schema.stem, table=schema.stem,
-                      files=len(pb_parts), read=read, inserted=inserted)
+            for ch in children:
+                cb = child_batches[ch.table]
+                for sub in getattr(p, ch.repeated_field):
+                    cb.append((run_id, ts, record_id, *gen_vals,
+                               *(getattr(sub, f) for f in ch.sub_fields), loaded_at))
+                if len(cb) >= batch_size:
+                    flush_child(ch)
+
+            record_id += 1
+            if len(main_batch) >= batch_size:
+                flush_main()
+
+    flush_main()
+    for ch in children:
+        flush_child(ch)
+
+    return UnitResult(stem=schema.stem, files=len(pb_parts),
+                      records=records, table_rows=table_rows)

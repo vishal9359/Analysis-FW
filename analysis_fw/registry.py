@@ -48,6 +48,11 @@ _PROTO_TO_CH = {
 # Loader-added bookkeeping columns (not from the proto).
 LEADING_COLUMNS = [("run_id", "String"), ("ts", "DateTime")]
 TRAILING_COLUMNS = [("_loaded_at", "DateTime")]
+# Correlation key, added to the main + child tables ONLY when a payload has
+# repeated sub-messages (i.e. child tables exist). A UInt64 sequence assigned
+# per record by the loader; links a main row to its child rows.
+# (Deferred to re-architecture: a multi-node-safe scheme — Snowflake/UUIDv7.)
+RECORD_ID_COLUMN = ("record_id", "UInt64")
 
 
 @dataclass(frozen=True)
@@ -57,29 +62,46 @@ class Column:
 
 
 @dataclass
+class ChildSchema:
+    """A table for one `repeated <Message>` field in the payload (e.g. per_queue).
+    One row per sub-element per record, carrying the header + record_id."""
+    table: str                     # <stem>_<repeated_field>
+    repeated_field: str            # payload field to iterate (e.g. "per_queue")
+    sub_fields: list[str]          # scalar field names of the sub-message
+    columns: list[Column]
+    order_by: list[str]
+
+
+@dataclass
 class TableSchema:
-    stem: str                      # == table name
-    record_cls: type               # the per-row message (e.g. BlockStatSample)
-    wrapper_cls: type | None       # the repeated wrapper (e.g. BlockDeviceStatLog)
+    stem: str                      # == main table name
+    record_cls: type               # the per-row message (StatLog)
+    wrapper_cls: type | None       # the repeated wrapper (StatLogs)
     repeated_field: str | None     # the repeated field name inside the wrapper
     generic_field: str             # the GenericFormat field name on the record
     payload_field: str             # the payload field name on the record
     generic_fields: list[str]      # header field names, in column order
-    payload_fields: list[str]      # payload field names, in column order
-    columns: list[Column]          # full table columns, in row order
+    payload_fields: list[str]      # SCALAR payload field names, in column order
+    columns: list[Column]          # main table columns, in row order
+    order_by: list[str]            # main table ORDER BY
+    has_record_id: bool            # True iff children exist
+    children: list[ChildSchema]    # one per repeated payload sub-message
     descriptor_bytes: bytes        # picklable, for worker processes
     schema_version: str
 
 
 def _scalar_columns(msg_desc, source: str) -> tuple[list[str], list[Column]]:
+    """Scalar fields of a message -> columns. Rejects repeated/nested — used for
+    the header (GenericFormat) and for a repeated sub-message's own fields, both
+    of which must be flat scalars."""
     names, cols = [], []
     for f in msg_desc.fields:
         if f.is_repeated:
             raise SchemaError(f"{source}: {msg_desc.name}.{f.name} is repeated "
-                              f"(payload/header fields must be scalars)")
+                              f"(this message's fields must be scalars)")
         if f.type == FD.TYPE_MESSAGE:
             raise SchemaError(f"{source}: {msg_desc.name}.{f.name} is a nested "
-                              f"message (payload/header fields must be scalars)")
+                              f"message (this message's fields must be scalars)")
         ch = _PROTO_TO_CH.get(f.type)
         if ch is None:
             raise SchemaError(f"{source}: {msg_desc.name}.{f.name} has unsupported "
@@ -87,6 +109,32 @@ def _scalar_columns(msg_desc, source: str) -> tuple[list[str], list[Column]]:
         names.append(f.name)
         cols.append(Column(f.name, ch))
     return names, cols
+
+
+def _split_payload(payload_desc, source: str):
+    """Split a payload into scalar fields (-> main table) and repeated
+    sub-messages (-> child tables). A repeated scalar or a singular nested
+    message is not supported and is rejected with a clear error."""
+    scalar_names, scalar_cols, repeated = [], [], []
+    for f in payload_desc.fields:
+        if f.is_repeated:
+            if f.type != FD.TYPE_MESSAGE:
+                raise SchemaError(
+                    f"{source}: payload.{f.name} is a repeated scalar; only "
+                    f"repeated messages (which become child tables) are supported")
+            repeated.append(f)          # -> its own child table
+            continue
+        if f.type == FD.TYPE_MESSAGE:
+            raise SchemaError(
+                f"{source}: payload.{f.name} is a singular nested message; payload "
+                f"fields must be scalars, or repeated messages for child tables")
+        ch = _PROTO_TO_CH.get(f.type)
+        if ch is None:
+            raise SchemaError(f"{source}: payload.{f.name} has unsupported "
+                              f"protobuf type {f.type}")
+        scalar_names.append(f.name)
+        scalar_cols.append(Column(f.name, ch))
+    return scalar_names, scalar_cols, repeated
 
 
 def _detect(pool, primary_file, source: str):
@@ -180,36 +228,61 @@ def build_schema_from_descriptor(stem: str, descriptor_bytes: bytes,
                    if wrap_desc is not None else None)
 
     generic_names, generic_cols = _scalar_columns(gfield.message_type, source)
-    payload_names, payload_cols = _scalar_columns(pfield.message_type, source)
+    payload_names, payload_cols, repeated = _split_payload(pfield.message_type, source)
 
-    columns = ([Column(n, t) for n, t in LEADING_COLUMNS]
-               + generic_cols + payload_cols
-               + [Column(n, t) for n, t in TRAILING_COLUMNS])
+    lead = [Column(n, t) for n, t in LEADING_COLUMNS]
+    trail = [Column(n, t) for n, t in TRAILING_COLUMNS]
+    rid = Column(*RECORD_ID_COLUMN)
+    has_children = len(repeated) > 0
 
-    # guard against a name clash between a generic and a payload field
-    seen = set()
-    for c in columns:
-        if c.name in seen:
-            raise SchemaError(f"{source}: duplicate column '{c.name}' "
-                              f"(a generic and a payload field share a name)")
-        seen.add(c.name)
+    # main table: run_id, ts, [record_id if children], generics, payload scalars, _loaded_at
+    main_cols = lead + ([rid] if has_children else []) + generic_cols + payload_cols + trail
+
+    # child tables: one per repeated sub-message; each carries the header +
+    # record_id + the sub-message's scalar fields. Ordered by its key dimension
+    # (the sub-message's first field, e.g. queue_id / cpu_id) for fast filtering.
+    children: list[ChildSchema] = []
+    for f in repeated:
+        sub_names, sub_cols = _scalar_columns(f.message_type, source)
+        if not sub_names:
+            raise SchemaError(f"{source}: payload.{f.name} sub-message has no fields")
+        child_cols = lead + [rid] + generic_cols + sub_cols + trail
+        _check_unique(child_cols, f"{source}:{f.name}")
+        key_dim = sub_names[0]     # convention: first field is the dimension key
+        children.append(ChildSchema(
+            table=f"{stem}_{f.name}", repeated_field=f.name, sub_fields=sub_names,
+            columns=child_cols, order_by=["run_id", "hostname", key_dim, "ts"]))
+
+    _check_unique(main_cols, source)
 
     return TableSchema(
         stem=stem, record_cls=record_cls, wrapper_cls=wrapper_cls,
         repeated_field=rep_field, generic_field=gfield.name,
         payload_field=pfield.name, generic_fields=generic_names,
-        payload_fields=payload_names, columns=columns,
-        descriptor_bytes=descriptor_bytes,
+        payload_fields=payload_names, columns=main_cols,
+        order_by=["run_id", "hostname", "ts"], has_record_id=has_children,
+        children=children, descriptor_bytes=descriptor_bytes,
         schema_version="sha256:" + hashlib.sha256(descriptor_bytes).hexdigest()[:16],
     )
 
 
-def create_table_ddl(database: str, schema: TableSchema) -> str:
-    cols = ",\n    ".join(f"`{c.name}` {c.ch_type}" for c in schema.columns)
+def _check_unique(columns: list[Column], source: str) -> None:
+    seen = set()
+    for c in columns:
+        if c.name in seen:
+            raise SchemaError(f"{source}: duplicate column '{c.name}' "
+                              f"(a generic and a payload/sub field share a name)")
+        seen.add(c.name)
+
+
+def create_table_ddl(database: str, table: str, columns: list[Column],
+                     order_by: list[str]) -> str:
+    cols = ",\n    ".join(f"`{c.name}` {c.ch_type}" for c in columns)
+    order = ", ".join(order_by)
     return (
-        f"CREATE TABLE IF NOT EXISTS `{database}`.`{schema.stem}`\n"
+        f"CREATE TABLE IF NOT EXISTS `{database}`.`{table}`\n"
         f"(\n    {cols}\n)\n"
         f"ENGINE = MergeTree\n"
         f"PARTITION BY run_id\n"
-        f"ORDER BY (run_id, hostname, ts)"
+        f"ORDER BY ({order})"
     )

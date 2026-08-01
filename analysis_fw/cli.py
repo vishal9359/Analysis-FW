@@ -62,18 +62,20 @@ def main(argv: list[str] | None = None) -> int:
                  f"(workers={cfg.store.workers})")
         report = run_load(args.input_dir, cfg)
 
-        # reconcile (MVP scope): read == inserted, per unit and overall
+        # reconcile (MVP scope): main-table rows == records read, per unit
         bad = [u for u in report.units if not u.ok]
         if bad:
             report.status = "failed"
             for u in bad:
-                log.error(f"{u.table}: read {u.read} but inserted {u.inserted}")
+                log.error(f"{u.stem}: {u.records} records read but "
+                          f"{u.table_rows.get(u.stem, 0)} rows in the main table")
 
         print(json.dumps(report.to_dict(), indent=2))
 
         if report.status != "complete":
             return ExitCode.INTEGRITY
-        log.info(f"done: {report.inserted} rows across {len(report.units)} tables")
+        log.info(f"done: {report.rows} rows across "
+                 f"{sum(len(u.table_rows) for u in report.units)} tables")
         return ExitCode.OK
 
     except AnalysisFWError as exc:
