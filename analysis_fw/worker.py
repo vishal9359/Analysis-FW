@@ -64,19 +64,32 @@ class UnitResult:
 
 
 def parse_ts(s: str) -> datetime | None:
-    """Parse the header timestamp string to a naive datetime, or None if it
-    matches no known format. The original string is always kept in the
-    `timestamp` column, so a parse miss never loses information."""
+    """Parse the header timestamp string to a datetime (aware if the string
+    carries a timezone), or None if it matches no known format. The original
+    string is always kept in the `timestamp` column, so a parse miss loses
+    nothing."""
     if not s:
         return None
     s = s.strip()
     m = _BRACKETS.match(s)
     if m:
         s = m.group(1).strip()
-    s = _MILLIS.sub(r"\1", s)   # drop trailing milliseconds
+
+    # ISO 8601 / RFC 3339 first — handles fractional seconds and a Z/offset
+    # timezone (e.g. 2026-07-31T16:33:53.005Z or ...+05:30). The Z rewrite keeps
+    # this working on Python < 3.11 too.
+    iso = (s[:-1] + "+00:00") if s.endswith("Z") else s
+    try:
+        return datetime.fromisoformat(iso)
+    except ValueError:
+        pass
+
+    # Fallback: human-readable formats. strptime here has no fractional-seconds
+    # slot, so drop a trailing millisecond group first.
+    s2 = _MILLIS.sub(r"\1", s)
     for fmt, has_year in _TS_FORMATS:
         try:
-            dt = datetime.strptime(s, fmt)
+            dt = datetime.strptime(s2, fmt)
         except ValueError:
             continue
         if not has_year:
@@ -92,7 +105,9 @@ def ts_for_db(s: str) -> datetime:
     dt = parse_ts(s)
     if dt is None:
         return _DT_MIN
-    dt = dt.replace(tzinfo=_UTC)
+    # A tz-aware timestamp (ISO with Z/offset) is converted to the real UTC
+    # instant; a naive one is interpreted as UTC. Either way ts is deterministic.
+    dt = dt.astimezone(_UTC) if dt.tzinfo is not None else dt.replace(tzinfo=_UTC)
     if dt < _DT_MIN:
         return _DT_MIN
     if dt > _DT_MAX:

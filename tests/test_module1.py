@@ -132,6 +132,17 @@ def test_parse_ts_formats():
     assert parse_ts("") is None and parse_ts("garbage") is None
 
 
+def test_iso8601_rfc3339():
+    """ISO 8601 / RFC 3339 with fractional seconds and Z/offset."""
+    from analysis_fw.worker import ts_for_db
+    assert parse_ts("2026-07-31T16:33:53.005Z").hour == 16
+    # +05:30 offset is converted to the real UTC instant
+    assert ts_for_db("2026-07-31T16:33:53.005+05:30").hour == 11
+    assert ts_for_db("2026-07-31T16:33:53.005Z").hour == 16
+    # invalid RFC 3339 (both Z and offset) must not crash — falls back to epoch
+    assert ts_for_db("2026-07-31T16:33:53.005Z05:30").year == 1970
+
+
 def test_ts_for_db_never_out_of_range():
     import struct
     from analysis_fw.worker import ts_for_db
