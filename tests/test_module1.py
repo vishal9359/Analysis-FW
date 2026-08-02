@@ -17,11 +17,13 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 
+import shutil
+
 from analysis_fw.config import Config, StoreConfig
 from analysis_fw.discover import discover
-from analysis_fw.errors import InputError, SchemaError
+from analysis_fw.errors import ExitCode, InputError, SchemaError
 from analysis_fw.registry import build_schema, build_schema_from_descriptor, create_table_ddl
-from analysis_fw.runner import run_load
+from analysis_fw.runner import find_runs, run_batch, run_load
 from analysis_fw.store.memory import MemoryStore
 from analysis_fw.worker import load_unit, parse_ts
 
@@ -227,6 +229,62 @@ def test_descriptor_rebuild_matches():
         NVME, s.descriptor_bytes, source=f"{NVME}.proto")
     assert [c.name for c in rebuilt.columns] == [c.name for c in s.columns]
     assert [ch.table for ch in rebuilt.children] == [ch.table for ch in s.children]
+
+
+# ---- batch loading ------------------------------------------------------
+
+def _make_batch(tmp_path, good=("t1", "t2"), broken=("bad",)):
+    parent = tmp_path / "runs"
+    parent.mkdir()
+    for tag in good:
+        shutil.copytree(FIXTURE, parent / f"ProfileData-{tag}-20260727-180221")
+    for tag in broken:
+        d = parent / f"ProfileData-{tag}-20260727-180221" / "Linux" / "Block"
+        d.mkdir(parents=True)
+        (d / f"{BLOCK1}.proto").write_text(_units()[BLOCK1].proto_path.read_text())
+        (d / f"{BLOCK1}.pb").write_bytes(b"\xff\xff not protobuf")
+    return parent
+
+
+def test_find_runs_and_autodetect(tmp_path):
+    parent = _make_batch(tmp_path, good=("t1", "t2"), broken=())
+    names = [d.name for d in find_runs(parent)]
+    assert names == ["ProfileData-t1-20260727-180221", "ProfileData-t2-20260727-180221"]
+    # a single run directory has no ProfileData-* children -> not batch
+    assert find_runs(FIXTURE) == []
+
+
+def test_batch_all_good(tmp_path):
+    parent = _make_batch(tmp_path, good=("t1", "t2", "t3"), broken=())
+    b = run_batch(parent, _cfg(), store=MemoryStore(), continue_on_error=False)
+    assert b.status == "complete" and b.exit_code == ExitCode.OK
+    assert [o.status for o in b.outcomes] == ["complete"] * 3
+
+
+def test_batch_fail_fast_stops_and_skips(tmp_path):
+    # "bad" sorts before "t1"/"t2", so it fails first and the rest are skipped
+    parent = _make_batch(tmp_path, good=("t1", "t2"), broken=("bad",))
+    b = run_batch(parent, _cfg(), store=MemoryStore(), continue_on_error=False)
+    statuses = {o.run_id: o.status for o in b.outcomes}
+    assert statuses["ProfileData-bad-20260727-180221"] == "failed"
+    assert statuses["ProfileData-t1-20260727-180221"] == "skipped"
+    assert statuses["ProfileData-t2-20260727-180221"] == "skipped"
+    assert b.exit_code == ExitCode.INPUT      # the failed run's class code
+
+
+def test_batch_continue_on_error(tmp_path):
+    parent = _make_batch(tmp_path, good=("t1", "t2"), broken=("bad",))
+    b = run_batch(parent, _cfg(), store=MemoryStore(), continue_on_error=True)
+    counts = {s: sum(1 for o in b.outcomes if o.status == s)
+              for s in ("complete", "failed", "skipped")}
+    assert counts == {"complete": 2, "failed": 1, "skipped": 0}
+    assert b.exit_code == ExitCode.INPUT      # first failing run's code
+
+
+def test_batch_empty_parent_errors(tmp_path):
+    empty = tmp_path / "empty"; empty.mkdir()
+    with pytest.raises(InputError, match="no ProfileData"):
+        run_batch(empty, _cfg(), store=MemoryStore())
 
 
 # ---- failure path -------------------------------------------------------

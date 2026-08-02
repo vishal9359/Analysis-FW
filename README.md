@@ -30,6 +30,35 @@ Override the ClickHouse endpoint per environment without editing the config:
 CH_HOST=10.0.0.5 CH_PORT=8123 python -m analysis_fw <input_dir>
 ```
 
+## Batch: loading many runs
+
+Point the loader at a **parent** directory that holds several `ProfileData-*`
+runs and it loads each one, sequentially (each run still parallelizes its own
+units internally):
+
+```bash
+python -m analysis_fw <parent_dir>              # auto-detected as batch
+python -m analysis_fw <parent_dir> --batch      # force batch
+```
+
+Batch is **auto-detected** when the path contains `ProfileData-*` subdirectories;
+`--batch` forces it (and errors if there are none).
+
+Failure handling:
+
+- **Default: fail-fast.** The first run that fails (a hard error *or* a
+  reconciliation mismatch) stops the batch; the remaining runs are marked
+  `skipped`. Exit code = that run's failure class.
+- **`--continue-on-error`:** every run is attempted; failures are collected.
+  Exit code = the *first* failing run's class (`0` only if all succeed).
+
+Output is a JSON batch report (per-run `complete`/`failed`/`skipped` + totals).
+Note: runs load into their own `run_id` partitions and loading is still
+append-only, so a run that completed before a failure stays in the DB.
+
+*This is a single-machine bulk loader. Fan-out across a fleet (Airflow / the
+streaming re-architecture) is deferred — batch mode is not a replacement for it.*
+
 ## Input contract
 
 Each layer folder holds one or more **types**, each a `.proto` + its `.pb` data:

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .config import Config
 from .discover import Unit, discover
-from .errors import AnalysisFWError, DatabaseError
+from .errors import AnalysisFWError, DatabaseError, ExitCode, InputError
 from .registry import build_schema, build_schema_from_descriptor
 from .store.clickhouse import ClickHouseStore
 from .store.base import Store
@@ -119,7 +119,7 @@ def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadRe
         finally:
             if own:
                 st.close()
-        return report
+        return _reconcile(report)
 
     # parallel path — one job per unit, across a process pool
     jobs = [
@@ -135,4 +135,107 @@ def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadRe
     with cf.ProcessPoolExecutor(max_workers=workers) as ex:
         for res in ex.map(_run_job, jobs):
             report.units.append(res)
+    return _reconcile(report)
+
+
+def _reconcile(report: LoadReport) -> LoadReport:
+    """A run is 'failed' if any unit's main-table rows != records read."""
+    if any(not u.ok for u in report.units):
+        report.status = "failed"
     return report
+
+
+# --------------------------------------------------------------------------
+# batch: load every ProfileData-* run under a parent directory, sequentially
+# --------------------------------------------------------------------------
+
+RUN_PREFIX = "ProfileData-"
+
+
+def find_runs(parent: Path) -> list[Path]:
+    """The ProfileData-* run directories directly under `parent`, name-sorted.
+    Empty if there are none (i.e. `parent` is itself a single run)."""
+    if not parent.is_dir():
+        return []
+    return sorted(d for d in parent.iterdir()
+                  if d.is_dir() and d.name.startswith(RUN_PREFIX))
+
+
+@dataclass
+class RunOutcome:
+    run_id: str
+    status: str                 # "complete" | "failed" | "skipped"
+    exit_code: int = 0
+    error: str = ""
+    report: dict | None = None  # LoadReport.to_dict(), when the run was attempted
+
+
+@dataclass
+class BatchReport:
+    parent: str
+    outcomes: list[RunOutcome] = field(default_factory=list)
+
+    @property
+    def exit_code(self) -> int:
+        # first failing run's code (0 if none failed)
+        for o in self.outcomes:
+            if o.status == "failed":
+                return o.exit_code
+        return ExitCode.OK
+
+    @property
+    def status(self) -> str:
+        return "complete" if all(o.status == "complete" for o in self.outcomes) else "failed"
+
+    def to_dict(self) -> dict:
+        n = {s: sum(1 for o in self.outcomes if o.status == s)
+             for s in ("complete", "failed", "skipped")}
+        return {
+            "mode": "batch",
+            "parent": self.parent,
+            "status": self.status,
+            "totals": {"runs": len(self.outcomes), **n},
+            "runs": [
+                {"run_id": o.run_id, "status": o.status,
+                 **({"exit_code": o.exit_code, "error": o.error}
+                    if o.status == "failed" else {}),
+                 **({"totals": o.report["totals"]} if o.report else {})}
+                for o in self.outcomes
+            ],
+        }
+
+
+def run_batch(parent: Path, cfg: Config, store: Store | None = None,
+              continue_on_error: bool = False) -> BatchReport:
+    """Load each ProfileData-* run under `parent`, sequentially (each run still
+    parallelizes its own units). Default is fail-fast: the first failed run stops
+    the batch and the rest are marked skipped. With continue_on_error, every run
+    is attempted and failures are collected. A run 'fails' on a raised error OR a
+    reconciliation mismatch."""
+    run_dirs = find_runs(parent)
+    if not run_dirs:
+        raise InputError(f"no {RUN_PREFIX}* directories under {parent}")
+
+    batch = BatchReport(parent=str(parent))
+    stop = False
+    for run_dir in run_dirs:
+        if stop:
+            batch.outcomes.append(RunOutcome(run_dir.name, "skipped"))
+            continue
+        try:
+            report = run_load(run_dir, cfg, store)
+        except AnalysisFWError as exc:
+            batch.outcomes.append(RunOutcome(run_dir.name, "failed",
+                                             exc.exit_code, str(exc)))
+            stop = not continue_on_error
+            continue
+        if report.status != "complete":
+            bad = [u.stem for u in report.units if not u.ok]
+            batch.outcomes.append(RunOutcome(
+                run_dir.name, "failed", ExitCode.INTEGRITY,
+                f"reconciliation mismatch in: {', '.join(bad)}", report.to_dict()))
+            stop = not continue_on_error
+        else:
+            batch.outcomes.append(RunOutcome(run_dir.name, "complete",
+                                             report=report.to_dict()))
+    return batch
