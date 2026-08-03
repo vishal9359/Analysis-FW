@@ -70,3 +70,7 @@ layout.
 - A malformed timestamp never crashes the load — `ts` falls back to the epoch
   (1970-01-01) and the original string is preserved in `timestamp` — but the
   `ts` value would be wrong, so emit valid RFC 3339.
+- **`...Z00:00` / `...Z<offset>` (`Z` *and* an offset) is invalid** — RFC 3339
+  uses one or the other, never both. The loader tolerates it (`Z` means UTC, so
+  the trailing offset is dropped), but please emit a clean `...Z` — the Go
+  `FormatTimestamp` above already does.

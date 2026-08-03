@@ -141,8 +141,16 @@ def test_iso8601_rfc3339():
     # +05:30 offset is converted to the real UTC instant
     assert ts_for_db("2026-07-31T16:33:53.005+05:30").hour == 11
     assert ts_for_db("2026-07-31T16:33:53.005Z").hour == 16
-    # invalid RFC 3339 (both Z and offset) must not crash — falls back to epoch
-    assert ts_for_db("2026-07-31T16:33:53.005Z05:30").year == 1970
+
+
+def test_malformed_z_offset_treated_as_utc():
+    """Producer bug: 'Z' followed by an offset ('...Z00:00', '...Z05:30').
+    'Z' means UTC, so the trailing offset is dropped and it parses as UTC —
+    not the 1970 epoch fallback."""
+    from analysis_fw.worker import ts_for_db
+    t = ts_for_db("2026-08-03T07:58:57.876Z00:00")   # the real Profile FW string
+    assert (t.year, t.month, t.day, t.hour, t.minute, t.second) == (2026, 8, 3, 7, 58, 57)
+    assert ts_for_db("2026-07-31T16:33:53.005Z05:30").hour == 16   # Z wins -> UTC
 
 
 def test_ts_for_db_never_out_of_range():

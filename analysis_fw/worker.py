@@ -36,6 +36,10 @@ _TS_FORMATS = [
 _BRACKETS = re.compile(r"^\[(.*)\]$")
 # a millisecond group tacked onto the time, e.g. "18:01:46:233" or "18:01:46.233"
 _MILLIS = re.compile(r"(\d{2}:\d{2}:\d{2})[:.]\d{1,6}\b")
+# a stray offset appended after 'Z' (e.g. "...Z00:00" or "...Z05:30"). RFC 3339
+# uses either 'Z' (UTC) OR an offset, never both — this is a producer bug. 'Z'
+# already means UTC, so we drop the trailing offset and keep 'Z'.
+_Z_OFFSET = re.compile(r"Z[+-]?\d{2}:?\d{2}$")
 
 # ClickHouse DateTime is an unsigned 32-bit epoch: 1970-01-01 .. 2106-02-07 UTC.
 # We treat the (tz-less) header string as UTC so the stored ts is deterministic
@@ -74,6 +78,7 @@ def parse_ts(s: str) -> datetime | None:
     m = _BRACKETS.match(s)
     if m:
         s = m.group(1).strip()
+    s = _Z_OFFSET.sub("Z", s)   # normalize malformed "...Z00:00" -> "...Z"
 
     # ISO 8601 / RFC 3339 first — handles fractional seconds and a Z/offset
     # timezone (e.g. 2026-07-31T16:33:53.005Z or ...+05:30). The Z rewrite keeps
