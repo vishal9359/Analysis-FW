@@ -56,73 +56,80 @@ read_MiB/s   = 8192×512/1048576 = 4.0     write_MiB/s  = 32768×512/1048576 = 1
 read_lat_ms  = 250/100 = 2.5              write_lat_ms = 600/200 = 3.0
 ```
 
-## Query — clickhouse-client
+## Queries (one panel each)
+
+Three separate panels — IOPS, bandwidth, and latency have very different scales,
+so keeping them apart avoids one flattening the others.
+
+Each is shown in **Grafana** form (dashboard variables `$run_id`, `$device`).
+For **clickhouse-client**, make three edits: `$__timeFilter(ts)` +
+`'$run_id'`/`'$device'` → literal values, `ts AS time` → `ts`, and
+`ORDER BY time` → `ORDER BY ts`.
+
+All three share the same window and the `rn > 1` guard that drops the first
+sample of each series.
+
+### 1. IOPS
 
 ```sql
-SELECT
-    ts,
-    d_read_ios                                       AS read_iops,
-    d_write_ios                                      AS write_iops,
-    round(d_sec_read    * 512 / 1048576, 3)          AS read_mibps,
-    round(d_sec_written * 512 / 1048576, 3)          AS write_mibps,
-    round(d_read_time  / nullIf(d_read_ios,  0), 3)  AS read_lat_ms,
-    round(d_write_time / nullIf(d_write_ios, 0), 3)  AS write_lat_ms
+SELECT ts AS time,
+    d_read_ios  AS "read IOPS",
+    d_write_ios AS "write IOPS"
 FROM
 (
-    SELECT
-        ts,
+    SELECT ts,
         row_number() OVER w AS rn,
-        greatest(0, toInt64(read_ios)        - toInt64(lagInFrame(read_ios)        OVER w)) AS d_read_ios,
-        greatest(0, toInt64(write_ios)       - toInt64(lagInFrame(write_ios)       OVER w)) AS d_write_ios,
-        greatest(0, toInt64(sectors_read)    - toInt64(lagInFrame(sectors_read)    OVER w)) AS d_sec_read,
-        greatest(0, toInt64(sectors_written) - toInt64(lagInFrame(sectors_written) OVER w)) AS d_sec_written,
-        greatest(0, toInt64(read_time_ms)    - toInt64(lagInFrame(read_time_ms)    OVER w)) AS d_read_time,
-        greatest(0, toInt64(write_time_ms)   - toInt64(lagInFrame(write_time_ms)   OVER w)) AS d_write_time
+        greatest(0, toInt64(read_ios)  - toInt64(lagInFrame(read_ios)  OVER w)) AS d_read_ios,
+        greatest(0, toInt64(write_ios) - toInt64(lagInFrame(write_ios) OVER w)) AS d_write_ios
     FROM profile_fw.linux_block_1_stats
-    WHERE run_id = 'ProfileData-<tag>-<timestamp>'
-      AND device = 'nvme0n1'
-    WINDOW w AS (PARTITION BY run_id, hostname, device ORDER BY ts)
-)
-WHERE rn > 1                    -- drop the first sample of each series (no prior second)
-ORDER BY ts
-```
-
-## Query — Grafana
-
-Time-series panel with dashboard variables `$run_id` and `$device`:
-
-```sql
-SELECT
-    ts AS time,
-    d_read_ios                                       AS "read IOPS",
-    d_write_ios                                      AS "write IOPS",
-    round(d_sec_read    * 512 / 1048576, 3)          AS "read MiB/s",
-    round(d_sec_written * 512 / 1048576, 3)          AS "write MiB/s",
-    round(d_read_time  / nullIf(d_read_ios,  0), 3)  AS "read latency ms",
-    round(d_write_time / nullIf(d_write_ios, 0), 3)  AS "write latency ms"
-FROM
-(
-    SELECT
-        ts,
-        row_number() OVER w AS rn,
-        greatest(0, toInt64(read_ios)        - toInt64(lagInFrame(read_ios)        OVER w)) AS d_read_ios,
-        greatest(0, toInt64(write_ios)       - toInt64(lagInFrame(write_ios)       OVER w)) AS d_write_ios,
-        greatest(0, toInt64(sectors_read)    - toInt64(lagInFrame(sectors_read)    OVER w)) AS d_sec_read,
-        greatest(0, toInt64(sectors_written) - toInt64(lagInFrame(sectors_written) OVER w)) AS d_sec_written,
-        greatest(0, toInt64(read_time_ms)    - toInt64(lagInFrame(read_time_ms)    OVER w)) AS d_read_time,
-        greatest(0, toInt64(write_time_ms)   - toInt64(lagInFrame(write_time_ms)   OVER w)) AS d_write_time
-    FROM profile_fw.linux_block_1_stats
-    WHERE $__timeFilter(ts)
-      AND run_id = '$run_id'
-      AND device = '$device'
+    WHERE $__timeFilter(ts) AND run_id = '$run_id' AND device = '$device'
     WINDOW w AS (PARTITION BY run_id, hostname, device ORDER BY ts)
 )
 WHERE rn > 1
 ORDER BY time
 ```
 
-**Tip:** IOPS/bandwidth (rates) and latency (ms) have very different scales — put
-latency on a **second Y-axis** or a separate panel so neither flattens the other.
+### 2. Bandwidth (MiB/s)
+
+```sql
+SELECT ts AS time,
+    round(d_sec_read    * 512 / 1048576, 3) AS "read MiB/s",
+    round(d_sec_written * 512 / 1048576, 3) AS "write MiB/s"
+FROM
+(
+    SELECT ts,
+        row_number() OVER w AS rn,
+        greatest(0, toInt64(sectors_read)    - toInt64(lagInFrame(sectors_read)    OVER w)) AS d_sec_read,
+        greatest(0, toInt64(sectors_written) - toInt64(lagInFrame(sectors_written) OVER w)) AS d_sec_written
+    FROM profile_fw.linux_block_1_stats
+    WHERE $__timeFilter(ts) AND run_id = '$run_id' AND device = '$device'
+    WINDOW w AS (PARTITION BY run_id, hostname, device ORDER BY ts)
+)
+WHERE rn > 1
+ORDER BY time
+```
+
+### 3. Average latency (ms)
+
+```sql
+SELECT ts AS time,
+    round(d_read_time  / nullIf(d_read_ios,  0), 3) AS "read latency ms",
+    round(d_write_time / nullIf(d_write_ios, 0), 3) AS "write latency ms"
+FROM
+(
+    SELECT ts,
+        row_number() OVER w AS rn,
+        greatest(0, toInt64(read_ios)      - toInt64(lagInFrame(read_ios)      OVER w)) AS d_read_ios,
+        greatest(0, toInt64(write_ios)     - toInt64(lagInFrame(write_ios)     OVER w)) AS d_write_ios,
+        greatest(0, toInt64(read_time_ms)  - toInt64(lagInFrame(read_time_ms)  OVER w)) AS d_read_time,
+        greatest(0, toInt64(write_time_ms) - toInt64(lagInFrame(write_time_ms) OVER w)) AS d_write_time
+    FROM profile_fw.linux_block_1_stats
+    WHERE $__timeFilter(ts) AND run_id = '$run_id' AND device = '$device'
+    WINDOW w AS (PARTITION BY run_id, hostname, device ORDER BY ts)
+)
+WHERE rn > 1
+ORDER BY time
+```
 
 ## Notes
 
