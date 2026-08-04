@@ -149,6 +149,23 @@ fields (e.g. NVMe `per_queue`, `per_core`), each becomes its own child table
 `store.workers` (per-run process pool). DB credentials are **not** in config
 (the target uses the default user).
 
+## Generate simulated data
+
+`tests/make_fixture.py` writes a `ProfileData-*` run of realistic per-second
+time-series data (increasing timestamps, monotonic counters), so the pipeline
+and the metric queries can be exercised without waiting for real profiling:
+
+```bash
+python tests/make_fixture.py /tmp/fix                        # from tests/sample_protos/
+python tests/make_fixture.py /tmp/fix --protos <proto_dir>   # from the real protos
+
+python -m analysis_fw /tmp/fix/ProfileData-fixture-20260727-180221
+```
+
+Deriving per-second IOPS, bandwidth, and latency from the loaded counters — with
+ready ClickHouse and Grafana queries — is in
+[docs/block-metrics.md](docs/block-metrics.md).
+
 ## Scope & limitations (MVP)
 
 - **Append-only.** Re-loading the same run **duplicates** rows. The table's

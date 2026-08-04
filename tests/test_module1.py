@@ -211,7 +211,7 @@ def test_row_matches_illustration():
     row = dict(zip(cols, store.tables[BLOCK1][0]))
     assert row["run_id"] == FIXTURE.name
     assert row["hostname"] == "spark-e97e"
-    assert row["timestamp"] == "Mon Jul 27 18:02:21 2026"
+    assert row["timestamp"] == "2026-07-27T18:02:21.000Z"   # RFC 3339 UTC
     assert row["ts"].year == 2026
     assert row["device"] == "nvme0n1"
 
