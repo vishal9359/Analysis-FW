@@ -1,159 +1,176 @@
-# Analysis Framework — Module 1 (Offline Ingest, MVP)
+# Analysis Framework — Module 1 (Offline Ingest)
 
-Reads a completed `ProfileData-<tag>-<timestamp>` directory of protobuf profiling
-data and loads it into ClickHouse. Implements `Analysis-FW-Module1-MVP-Design.md`.
+Loads Profile FW protobuf profiling data into ClickHouse. Given a
+`ProfileData-<tag>-<timestamp>` run directory, it decodes every record and
+writes it to typed ClickHouse tables — completely, correctly, and repeatably.
+
+The schema is derived from the producer's `.proto` at runtime, so new fields,
+new layers, and new producers need **no code change**.
+
+## Architecture
+
+```
+ Profile FW (on each SUT)                    Analysis FW — Module 1 (this repo)
+ ────────────────────────                    ──────────────────────────────────
+ writes one run directory:                   $ python -m analysis_fw <run_dir>
+   ProfileData-<tag>-<ts>/                              │
+     Config/run_config.log                              ▼
+     Linux/<layer>/<layer>_<type>.proto     ┌───────────────────────────────────┐
+     Linux/<layer>/<layer>_<type>.pb   ───► │ discover → registry → reader →     │
+     SSD/ ...                                │ worker → store                     │
+                                             └───────────────────────────────────┘
+                                                         │
+                                                         ▼
+                                             ClickHouse — one DB per producer,
+                                             one table per <layer>_<type>
+```
+
+Pipeline stages (each a module):
+
+```
+discover   walk the run dir; pair each <stem>.proto with its <stem>.pb part(s)
+registry   compile the .proto at runtime → derive ClickHouse table(s) + columns
+reader     parse each .pb (one wrapper message) and iterate its records
+worker     flatten a record → row(s): scalars → main table, repeated → child tables
+store      create tables if absent; batched INSERT   (ClickHouse; in-memory for tests)
+```
+
+| Path | Responsibility |
+|---|---|
+| `analysis_fw/cli.py` | entry point; single-vs-batch dispatch; exit codes; JSON report |
+| `analysis_fw/config.py`, `config.yaml` | bundled config; `CH_HOST`/`CH_PORT` env overrides |
+| `analysis_fw/discover.py` | walk run dir, group `.proto`/`.pb` by stem, order split parts |
+| `analysis_fw/registry.py` | compile `.proto` → table schema (main + child tables) |
+| `analysis_fw/reader.py` | parse a `.pb` wrapper, yield records |
+| `analysis_fw/worker.py` | flatten records → rows; timestamp parsing |
+| `analysis_fw/runner.py` | run one directory (units in parallel) and batches of runs |
+| `analysis_fw/store/` | ClickHouse adapter + in-memory adapter (tests) |
+| `tests/`, `docs/` | test suite + fixtures; `docs/timestamp-format.md` |
 
 ## Install
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt      # protobuf, grpcio-tools, PyYAML, clickhouse-connect
 ```
 
-## Run
+## Usage
+
+**One run** — the input path is the only argument; config is bundled:
 
 ```bash
-python -m analysis_fw <input_dir>
-```
-
-`<input_dir>` is the `ProfileData-*` directory. Config is bundled
-(`analysis_fw/config.yaml`) and always loaded — the input path is the only
-argument. Airflow invokes it the same way, templating the path per run.
-
-```bash
-# example
 python -m analysis_fw /data/incoming/ProfileData-fio-4k-randread-20260627-144048
 ```
 
-Override the ClickHouse endpoint per environment without editing the config:
+**Many runs (batch)** — point at a parent directory of `ProfileData-*` runs; it
+loads each sequentially (each run still parallelizes its own units):
 
 ```bash
-CH_HOST=10.0.0.5 CH_PORT=8123 python -m analysis_fw <input_dir>
+python -m analysis_fw /data/incoming              # auto-detected as batch
+python -m analysis_fw /data/incoming --batch      # force batch
+python -m analysis_fw /data/incoming --continue-on-error   # attempt every run
 ```
 
-## Batch: loading many runs
+Default is **fail-fast**: the first failed run stops the batch and the rest are
+marked `skipped`. `--continue-on-error` attempts all and collects failures.
 
-Point the loader at a **parent** directory that holds several `ProfileData-*`
-runs and it loads each one, sequentially (each run still parallelizes its own
-units internally):
+Override the ClickHouse endpoint without editing the config:
 
 ```bash
-python -m analysis_fw <parent_dir>              # auto-detected as batch
-python -m analysis_fw <parent_dir> --batch      # force batch
+CH_HOST=10.0.0.5 CH_PORT=8123 python -m analysis_fw <dir>
 ```
 
-Batch is **auto-detected** when the path contains `ProfileData-*` subdirectories;
-`--batch` forces it (and errors if there are none).
+**Exit codes** tell the caller the failure class: `0` ok · `2` config ·
+`3` input · `4` schema · `5` database (retryable) · `6` integrity. In batch, the
+code is the first failing run's class.
 
-Failure handling:
+**Verify** what landed:
 
-- **Default: fail-fast.** The first run that fails (a hard error *or* a
-  reconciliation mismatch) stops the batch; the remaining runs are marked
-  `skipped`. Exit code = that run's failure class.
-- **`--continue-on-error`:** every run is attempted; failures are collected.
-  Exit code = the *first* failing run's class (`0` only if all succeed).
-
-Output is a JSON batch report (per-run `complete`/`failed`/`skipped` + totals).
-Note: runs load into their own `run_id` partitions and loading is still
-append-only, so a run that completed before a failure stays in the DB.
-
-*This is a single-machine bulk loader. Fan-out across a fleet (Airflow / the
-streaming re-architecture) is deferred — batch mode is not a replacement for it.*
+```sql
+SELECT count() FROM profile_fw.linux_block_1_stats;
+SELECT run_id, count() FROM profile_fw.linux_block_1_stats GROUP BY run_id;
+```
 
 ## Input contract
 
 Each layer folder holds one or more **types**, each a `.proto` + its `.pb` data:
 
 ```
-<layer>_<type>.proto        schema (see message shape below)
-<layer>_<type>.pb           data, single file
-<layer>_<type>.<NNN>.pb     data, split parts in order 000, 001, …
+<layer>_<type>.proto        schema
+<layer>_<type>.pb           data (single file)
+<layer>_<type>.<NNN>.pb     data (split parts, in order 000, 001, …)
 ```
 
-Each `.proto` follows the agreed **standard shape**:
+Every `.proto` follows the agreed shape:
 
 ```proto
 message GenericFormat { string timestamp; string hostname; uint32 component;
-                        string tag; uint32 log_level; }      // the header
-message Payload       { ... layer-specific scalar fields ... }  // the data
-message StatLog       { GenericFormat generic_format = 1;     // one row
+                        string tag; uint32 log_level; }        // the header
+message Payload       { ... layer-specific scalar fields ... }    // the data
+message StatLog       { GenericFormat generic_format = 1;       // one record
                         Payload payload = 2; }
-message StatLogs      { repeated StatLog stat_logs = 1; }     // a .pb file
+message StatLogs      { repeated StatLog stat_logs = 1; }       // a .pb file
 ```
 
-- A `.pb` file **is one `StatLogs` message** holding a `repeated` list of records.
-  Protobuf's repeated encoding delimits the records internally — **no framing /
-  length prefix**. A big run is split into several `.pb` files, each a complete
-  wrapper message.
-- The loader finds record/header/payload/wrapper **by structure** — the record is
-  the message with a `generic_format` field and a `payload` field; the wrapper is
-  the message with `repeated <record>`. It does **not** depend on the message
-  names, so all protos may reuse `StatLog`/`StatLogs`/`Payload` (each `.proto` is
-  compiled in its own descriptor pool, so identical names never collide). Adding
-  a field or a new layer needs no code change.
-- **Table = file stem** (`linux_block_1_stats`). Each type → its own table.
-- Each row is flattened: `run_id`, `ts` (parsed from `timestamp`), the generic
-  fields, the payload fields, `_loaded_at`.
-- `Config/` is ignored.
+- A `.pb` file **is one `StatLogs` wrapper** holding a `repeated` list of
+  records — protobuf's repeated encoding delimits them, so there is **no framing
+  / length prefix**. A big run is split into several `.pb` files, each a complete
+  wrapper.
+- The loader finds record / header / payload / wrapper **by structure** (the
+  record is the message with a `generic_format` field and a `payload` field), not
+  by message name — so protos may reuse `StatLog`/`StatLogs`/`Payload` (each is
+  compiled in its own descriptor pool; identical names never collide).
+- `Config/` is ignored. Timestamps: RFC 3339 UTC — see
+  [docs/timestamp-format.md](docs/timestamp-format.md).
 
-### Repeated sub-messages → child tables
+## What lands in ClickHouse
 
-If a `Payload` contains `repeated <Message>` fields (e.g. NVMe `per_queue`,
-`per_core`), each becomes its **own child table** `<stem>_<field>`:
+- **One database per producer** (`producer.database` in config), so component
+  ids never collide across producers.
+- **One table per `<layer>_<type>`** (the file stem is the table name).
+- Each record is flattened to one row: `run_id`, `ts` (parsed from `timestamp`),
+  the generic header fields, the payload scalar fields, `_loaded_at`.
+- `ENGINE = MergeTree`, `PARTITION BY run_id`, `ORDER BY (run_id, hostname, ts)`.
+  `run_id` is the run directory name.
 
-```proto
-message Payload {
-  ... scalar fields ...            // -> main table linux_nvme_1_stats
-  repeated NvmeQueueStat per_queue = 25;   // -> linux_nvme_1_stats_per_queue
-  repeated NvmeCoreStat  per_core  = 26;   // -> linux_nvme_1_stats_per_core
-}
-```
+**Repeated sub-messages → child tables.** If a `Payload` has `repeated <Message>`
+fields (e.g. NVMe `per_queue`, `per_core`), each becomes its own child table
+`<stem>_<field>`:
 
-- One record → **1 main row + N per_queue rows + M per_core rows** (additive,
-  never N×M). A `record_id` (UInt64 sequence per record) links them:
-  `main JOIN child USING (run_id, record_id)`.
-- Child tables carry the full header + `record_id` + their own fields, and are
-  ordered by their key dimension (`queue_id` / `cpu_id`) for fast filtering.
-- Scalar-only payloads (e.g. block) get **no** `record_id` and no child tables —
-  unchanged.
-- *`record_id` is a per-load sequence for now; a multi-node-safe scheme
-  (Snowflake/UUIDv7) is deferred to the streaming re-architecture, along with
-  multi-node `run_id` generation.*
+- One record → **1 main row + N + M child rows** (additive, never N×M).
+- A `record_id` (UInt64) links them: `main JOIN child USING (run_id, record_id)`.
+- Child tables carry the header + `record_id` + their own fields, ordered by
+  their key dimension (`queue_id` / `cpu_id`) for fast filtering.
+- Scalar-only payloads (e.g. block) get no `record_id` and no child tables.
 
-## What it does
+## Configuration
 
-`discover → build schema → create tables → load (parallel) → reconcile → JSON report`
+`analysis_fw/config.yaml` is bundled and always loaded. Key settings:
+`producer.database`, `store.host`/`port` (env-overridable), `store.batch_size`,
+`store.workers` (per-run process pool). DB credentials are **not** in config
+(the target uses the default user).
 
-- **Parallel:** one process per `.pb` unit (protobuf decode is CPU-bound; the GIL
-  makes threads pointless). Configurable pool size.
-- **Reconcile:** per unit, `read == inserted`; a mismatch fails the load.
-- **Exit codes** tell Airflow the failure class: `0` ok · `2` config · `3` input ·
-  `4` schema · `5` database (retryable) · `6` integrity.
+## Scope & limitations (MVP)
 
-## MVP scope
+- **Append-only.** Re-loading the same run **duplicates** rows. The table's
+  `PARTITION BY run_id` is ready for a future coordinator to drop-and-replace.
+- **Single machine.** Batch is a bounded per-run loop; fleet fan-out (Airflow /
+  the streaming re-architecture) is out of scope.
+- **Adding a field to an existing table** needs a one-time `ALTER TABLE ADD
+  COLUMN` (auto-migrate is deferred).
+- `record_id` and `run_id` are single-node schemes; multi-node-safe versions are
+  deferred to the re-architecture.
 
-In: discover, runtime schema (generic detection), parallel read, batched insert,
-per-unit reconcile, one database per producer.
+See `Analysis-FW-Module1-MVP-Design.md` for the full design.
 
-**Not yet (deferred, see design):** clean reload — **re-running a load appends
-(duplicates)**; the table's `PARTITION BY run_id` is already set up for the future
-coordinator to drop-and-replace. Also deferred: crash-recovery manifest,
-auto-migrate (adding a field to an existing table needs a one-time
-`ALTER TABLE ADD COLUMN`), quarantine, streaming.
+## Troubleshooting
 
-## Troubleshooting decode errors
+A `.pb` that fails to parse is reported as an input error (exit 3) with the file,
+the expected message type, and the first bytes — it means the `.pb` does not
+match its `.proto` (schema/version drift) or is truncated/corrupt.
 
-If a `.pb` fails to parse, the loader reports it as an input error (exit 3) with
-the file, the expected message type, and the first bytes — for example:
-
-```
-linux_block_1_stats.pb: could not parse the file as BlockDeviceStatLog (...).
-  => the .pb likely does not match its .proto (wrong schema/version), or the
-     file is truncated/corrupt. Confirm the .proto with Profile FW.
-```
-
-Because the format is now one self-delimited wrapper message per file, a decode
-failure means the `.pb` doesn't match its `.proto` (schema/version drift) or the
-file is corrupt — not a framing question.
+If `ts` shows `1970-01-01`, the `timestamp` string couldn't be parsed (the raw
+string is still kept in the `timestamp` column). See
+[docs/timestamp-format.md](docs/timestamp-format.md) for the expected format.
 
 ## Test
 
@@ -161,33 +178,6 @@ file is corrupt — not a framing question.
 python -m pytest tests/ -v
 ```
 
-Tests run the whole pipeline against an in-memory store, so no database is
-needed. `tests/make_fixture.py` generates sample data in the input format.
-The real ClickHouse insert is validated on a server (see below).
-
-## First run against a real ClickHouse
-
-```bash
-python tests/make_fixture.py /tmp/fix
-python -m analysis_fw /tmp/fix/ProfileData-fixture-20260627-144048
-# then, in clickhouse-client:
-#   SELECT count() FROM profile_fw.block_type1;   -- expect 1000
-```
-
-## Layout
-
-```
-analysis_fw/
-  config.yaml       bundled config (always loaded)
-  cli.py            entry point, exit codes, JSON report
-  config.py         load + validate; host/port from env
-  discover.py       tree walk, stem grouping, .proto/.pb pairing
-  registry.py       proto compile, table + column derivation, DDL
-  framing.py        varint de-framing
-  worker.py         decode one unit -> rows
-  runner.py         orchestration: sequential or process pool
-  store/
-    base.py         Store interface
-    clickhouse.py   DDL, batch insert
-    memory.py       in-memory store for tests
-```
+Tests run the whole pipeline against an in-memory store — no database needed.
+`tests/make_fixture.py` generates sample runs from `tests/sample_protos/`; pass
+`--protos <dir>` to generate from the real protos instead.
