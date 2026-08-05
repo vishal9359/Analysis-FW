@@ -12,7 +12,7 @@ new layers, and new producers need **no code change**.
 ```
  Profile FW (on each SUT)                    Analysis FW — Module 1 (this repo)
  ────────────────────────                    ──────────────────────────────────
- writes one run directory:                   $ python -m analysis_fw <run_dir>
+ writes one run directory:                   $ python -m src <run_dir>
    ProfileData-<tag>-<ts>/                              │
      Config/run_config.log                              ▼
      Linux/<layer>/<layer>_<type>.proto     ┌───────────────────────────────────┐
@@ -37,15 +37,15 @@ store      create tables if absent; batched INSERT   (ClickHouse; in-memory for 
 
 | Path | Responsibility |
 |---|---|
-| `analysis_fw/cli.py` | entry point; single-vs-batch dispatch; exit codes; JSON report |
-| `analysis_fw/config.py`, `config.yaml` | bundled config; `CH_HOST`/`CH_PORT` env overrides |
-| `analysis_fw/discover.py` | walk run dir, group `.proto`/`.pb` by stem, order split parts |
-| `analysis_fw/registry.py` | compile `.proto` → table schema (main + child tables) |
-| `analysis_fw/reader.py` | parse a `.pb` wrapper, yield records |
-| `analysis_fw/worker.py` | flatten records → rows; timestamp parsing |
-| `analysis_fw/runner.py` | run one directory (units in parallel) and batches of runs |
-| `analysis_fw/store/` | ClickHouse adapter + in-memory adapter (tests) |
-| `tests/`, `docs/` | test suite + fixtures; `docs/timestamp-format.md` |
+| `src/cli.py` | entry point; single-vs-batch dispatch; exit codes; JSON report |
+| `src/config.py` + `config/config.yaml` | load/validate config; `CH_HOST`/`CH_PORT` env + `--config` overrides |
+| `src/discover.py` | walk run dir, group `.proto`/`.pb` by stem, order split parts |
+| `src/registry.py` | compile `.proto` → table schema (main + child tables) |
+| `src/reader.py` | parse a `.pb` wrapper, yield records |
+| `src/worker.py` | flatten records → rows; timestamp parsing |
+| `src/runner.py` | run one directory (units in parallel) and batches of runs |
+| `src/store/` | ClickHouse adapter + in-memory adapter (tests) |
+| `config/`, `docs/`, `tests/` | editable config; docs (design, block-metrics, timestamp); test suite + fixtures |
 
 ## Install
 
@@ -55,19 +55,20 @@ pip install -r requirements.txt      # protobuf, grpcio-tools, PyYAML, clickhous
 
 ## Usage
 
-**One run** — the input path is the only argument; config is bundled:
+**One run** — from the repo root; the input path is the only argument (config
+comes from `config/config.yaml`):
 
 ```bash
-python -m analysis_fw /data/incoming/ProfileData-fio-4k-randread-20260627-144048
+python -m src /data/incoming/ProfileData-fio-4k-randread-20260627-144048
 ```
 
 **Many runs (batch)** — point at a parent directory of `ProfileData-*` runs; it
 loads each sequentially (each run still parallelizes its own units):
 
 ```bash
-python -m analysis_fw /data/incoming              # auto-detected as batch
-python -m analysis_fw /data/incoming --batch      # force batch
-python -m analysis_fw /data/incoming --continue-on-error   # attempt every run
+python -m src /data/incoming              # auto-detected as batch
+python -m src /data/incoming --batch      # force batch
+python -m src /data/incoming --continue-on-error   # attempt every run
 ```
 
 Default is **fail-fast**: the first failed run stops the batch and the rest are
@@ -76,7 +77,7 @@ marked `skipped`. `--continue-on-error` attempts all and collects failures.
 Override the ClickHouse endpoint without editing the config:
 
 ```bash
-CH_HOST=10.0.0.5 CH_PORT=8123 python -m analysis_fw <dir>
+CH_HOST=10.0.0.5 CH_PORT=8123 python -m src <dir>
 ```
 
 **Exit codes** tell the caller the failure class: `0` ok · `2` config ·
@@ -144,10 +145,13 @@ fields (e.g. NVMe `per_queue`, `per_core`), each becomes its own child table
 
 ## Configuration
 
-`analysis_fw/config.yaml` is bundled and always loaded. Key settings:
-`producer.database`, `store.host`/`port` (env-overridable), `store.batch_size`,
-`store.workers` (per-run process pool). DB credentials are **not** in config
-(the target uses the default user).
+Config lives at `config/config.yaml` (repo root), separate from the code so an
+operator can edit it in place. It is resolved relative to the source tree, so it
+loads from any working directory. Key settings: `producer.database`,
+`store.host`/`port` (also env-overridable — see Usage), `store.batch_size`,
+`store.workers` (per-run process pool). Point at a different file with
+`--config /path/to/config.yaml`. DB credentials are **not** in config (the
+target uses the default user).
 
 ## Generate simulated data
 
@@ -159,7 +163,7 @@ and the metric queries can be exercised without waiting for real profiling:
 python tests/make_fixture.py /tmp/fix                        # from tests/sample_protos/
 python tests/make_fixture.py /tmp/fix --protos <proto_dir>   # from the real protos
 
-python -m analysis_fw /tmp/fix/ProfileData-fixture-20260727-180221
+python -m src /tmp/fix/ProfileData-fixture-20260727-180221
 ```
 
 Deriving per-second IOPS, bandwidth, and latency from the loaded counters — with
@@ -177,7 +181,7 @@ ready ClickHouse and Grafana queries — is in
 - `record_id` and `run_id` are single-node schemes; multi-node-safe versions are
   deferred to the re-architecture.
 
-See `Analysis-FW-Module1-MVP-Design.md` for the full design.
+See [docs/design.md](docs/design.md) for the full design.
 
 ## Troubleshooting
 

@@ -1,10 +1,11 @@
-"""Load and validate the bundled config.
+"""Load and validate the config.
 
-The config file ships inside the module (``config.yaml`` beside this file) and
-is always loaded. Only host/port may be overridden by environment, so the same
-bundled config runs against the dev box and the office server unchanged. No
-credentials live in code or config (the target ClickHouse uses the default
-user with no password).
+The config file lives in the repo's top-level ``config/config.yaml`` so an
+operator can edit it without touching the code. Its path is resolved relative
+to the source tree (repo root), so it is found regardless of the current
+working directory; ``--config`` (CLI) overrides it. Host/port may also be
+overridden by environment (``CH_HOST``/``CH_PORT``). No credentials live in
+code or config (the target ClickHouse uses the default user with no password).
 """
 from __future__ import annotations
 
@@ -16,7 +17,8 @@ import yaml
 
 from .errors import ConfigError
 
-BUNDLED_CONFIG = Path(__file__).with_name("config.yaml")
+# src/config.py -> repo root is two parents up; config/ sits beside src/.
+DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "config.yaml"
 
 
 @dataclass(frozen=True)
@@ -44,9 +46,9 @@ def _require(d: dict, key: str, section: str):
 
 
 def load_config(path: Path | None = None) -> Config:
-    path = path or BUNDLED_CONFIG
+    path = path or DEFAULT_CONFIG
     if not path.is_file():
-        raise ConfigError(f"config: bundled config not found at {path}")
+        raise ConfigError(f"config: config file not found at {path}")
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:

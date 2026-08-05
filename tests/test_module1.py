@@ -19,13 +19,13 @@ sys.path.insert(0, str(ROOT))
 
 import shutil
 
-from analysis_fw.config import Config, StoreConfig
-from analysis_fw.discover import discover
-from analysis_fw.errors import ExitCode, InputError, SchemaError
-from analysis_fw.registry import build_schema, build_schema_from_descriptor, create_table_ddl
-from analysis_fw.runner import find_runs, run_batch, run_load
-from analysis_fw.store.memory import MemoryStore
-from analysis_fw.worker import load_unit, parse_ts
+from src.config import Config, StoreConfig
+from src.discover import discover
+from src.errors import ExitCode, InputError, SchemaError
+from src.registry import build_schema, build_schema_from_descriptor, create_table_ddl
+from src.runner import find_runs, run_batch, run_load
+from src.store.memory import MemoryStore
+from src.worker import load_unit, parse_ts
 
 FIXTURE = HERE / "_fixture" / "ProfileData-fixture-20260727-180221"
 
@@ -136,7 +136,7 @@ def test_parse_ts_formats():
 
 def test_iso8601_rfc3339():
     """ISO 8601 / RFC 3339 with fractional seconds and Z/offset."""
-    from analysis_fw.worker import ts_for_db
+    from src.worker import ts_for_db
     assert parse_ts("2026-07-31T16:33:53.005Z").hour == 16
     # +05:30 offset is converted to the real UTC instant
     assert ts_for_db("2026-07-31T16:33:53.005+05:30").hour == 11
@@ -147,7 +147,7 @@ def test_malformed_z_offset_treated_as_utc():
     """Producer bug: 'Z' followed by an offset ('...Z00:00', '...Z05:30').
     'Z' means UTC, so the trailing offset is dropped and it parses as UTC —
     not the 1970 epoch fallback."""
-    from analysis_fw.worker import ts_for_db
+    from src.worker import ts_for_db
     t = ts_for_db("2026-08-03T07:58:57.876Z00:00")   # the real Profile FW string
     assert (t.year, t.month, t.day, t.hour, t.minute, t.second) == (2026, 8, 3, 7, 58, 57)
     assert ts_for_db("2026-07-31T16:33:53.005Z05:30").hour == 16   # Z wins -> UTC
@@ -155,7 +155,7 @@ def test_malformed_z_offset_treated_as_utc():
 
 def test_ts_for_db_never_out_of_range():
     import struct
-    from analysis_fw.worker import ts_for_db
+    from src.worker import ts_for_db
     for s in ["Monday July 27 18:01:46:233", "Mon Jul 27 18:02:21 2026",
               "", "garbage", "Sat Jun 27 14:40:48 1969"]:
         epoch = int(ts_for_db(s).timestamp())

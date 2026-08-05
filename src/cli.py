@@ -1,10 +1,10 @@
 """Command-line entry point.
 
-Usage:
-    python -m analysis_fw <input_dir>              # one ProfileData-* run
-    python -m analysis_fw <parent_dir>            # batch: many runs (auto-detect)
-    python -m analysis_fw <parent_dir> --batch    # batch: force
-    python -m analysis_fw <parent_dir> --batch --continue-on-error
+Usage (run from the repo root):
+    python -m src <input_dir>              # one ProfileData-* run
+    python -m src <parent_dir>            # batch: many runs (auto-detect)
+    python -m src <parent_dir> --batch    # batch: force
+    python -m src <parent_dir> --batch --continue-on-error
 
 A single run directory holds one ProfileData-<tag>-<timestamp> run. A parent
 directory holds several ProfileData-* runs; batch mode loads each sequentially
@@ -41,7 +41,7 @@ def _setup_logging(level: str, fmt: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="analysis_fw",
+        prog="python -m src",
         description="Load a ProfileData-* directory into ClickHouse.")
     parser.add_argument("input_dir", type=Path,
                         help="a ProfileData-* run directory, or a parent of several")
@@ -51,11 +51,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--continue-on-error", action="store_true",
                         help="batch: keep loading remaining runs after one fails "
                              "(default: stop at the first failure)")
+    parser.add_argument("--config", type=Path, default=None,
+                        help="path to a config.yaml (default: config/config.yaml)")
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args(argv)
 
     try:
-        cfg = load_config()
+        cfg = load_config(args.config)
     except AnalysisFWError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return exc.exit_code

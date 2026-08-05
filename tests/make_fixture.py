@@ -4,7 +4,7 @@ Generate a ProfileData-* tree from real .proto files, with FULL payloads.
 
 Reads every .proto in tests/sample_protos/ and generates wrapper .pb data that
 fills every generic and payload field. It reuses the loader's own schema
-detection (analysis_fw.registry), so the fixture can never drift from what the
+detection (src.registry), so the fixture can never drift from what the
 loader expects.
 
 The data is a realistic time series: each record gets an increasing per-second
@@ -27,7 +27,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from analysis_fw.registry import build_schema  # reuse the loader's detection
+from src.registry import build_schema  # reuse the loader's detection
 
 DEFAULT_PROTOS = HERE / "sample_protos"
 

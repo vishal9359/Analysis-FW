@@ -57,12 +57,12 @@ No reload, no partition drop, no DB-side reconcile in MVP — those come with th
 - Any worker failure → whole load fails (non-zero exit).
 - **MVP is append-only: re-running a load duplicates rows.** Clean reload (drop + replace) arrives with the coordinator; the table's partition key is already set up for it.
 
-## 6. Config (bundled with the module)
+## 6. Config (editable, at the repo root)
 
-The config file ships **inside the module** and is always loaded — same for CLI and Airflow. Only the input path is passed per run.
+The config file lives at **`config/config.yaml`** (repo root), separate from the code so an operator can edit it in place. It is resolved relative to the source tree, so it loads from any working directory — same for CLI and Airflow. Only the input path is passed per run; `--config` points at an alternate file.
 
 ```yaml
-# analysis_fw/config.yaml  (bundled, always loaded)
+# config/config.yaml  (repo root, editable)
 producer: { name: profile_fw, database: profile_fw }
 store:    { host: localhost, port: 8123,
             batch_size: 100000, workers: 6, async_insert: false }
@@ -70,26 +70,30 @@ logging:  { level: INFO, format: json }
 # DB creds NOT here — from env (CH_USER / CH_PASSWORD)
 ```
 
-- **Secrets stay out of the file** — credentials come from env, so the bundled config carries no passwords.
-- **`store.host` / `store.port`** may be overridden by env (`CH_HOST` / `CH_PORT`) so the same bundled config works on the dev box and the office server without editing.
-- **One bundled config = one producer/database.** Fine for MVP (Profile FW only). When UVP / TraceVision arrive, either deploy the module again with its own config, or add config-selection then — a small, deferred change.
+- **Secrets stay out of the file** — credentials come from env, so the config carries no passwords.
+- **`store.host` / `store.port`** may be overridden by env (`CH_HOST` / `CH_PORT`) so the same config works on the dev box and the office server without editing.
+- **One config = one producer/database.** Fine for MVP (Profile FW only). When UVP / TraceVision arrive, either deploy the module again with its own config, or add config-selection then — a small, deferred change.
 
 See §8 for what each key means.
 
 ## 7. Layout
 
 ```
-analysis_fw/
-  config.yaml       bundled default config (always loaded)
+config/
+  config.yaml       editable config (repo root; loaded on every run)
+src/
   cli.py            input-path arg, exit codes, JSON summary, fan-out to the pool
-  config.py         load bundled config + validate; creds/host from env
+  config.py         load config + validate; creds/host from env, --config override
   discover.py       tree walk, stem grouping, .proto/.pb pairing
   registry.py       proto compile, table + column derivation
-  framing.py        varint de-framing
+  reader.py         parse a .pb wrapper, yield records
   worker.py         one .pb: read -> decode -> batch -> insert
+  runner.py         run one directory (units in parallel) and batches of runs
   store/
     base.py         Store interface
     clickhouse.py   DDL (create db/table), batch insert, count
+    memory.py       in-memory Store (tests)
+docs/               design, block-metrics, timestamp-format
 tests/
 ```
 
@@ -97,14 +101,14 @@ No `coordinator.py`. `cli.py` just fans units out to the pool and collects their
 
 ## 8. Invocation & config
 
-**One argument — the input path. The config is bundled and always loaded.**
+**One argument — the input path. The config loads from `config/config.yaml`.**
 
 ```
-analysis_fw <input_dir>          # same for CLI and Airflow
+python -m src <input_dir>        # run from the repo root; same for CLI and Airflow
 ```
 
 - **`<input_dir>`** — the `ProfileData-*` directory for *this* run. Airflow templates it each run (e.g. from the profiling task's XCom).
-- **Config** — `analysis_fw/config.yaml` inside the module, loaded on every run. The input path is deliberately *not* in it, so the file never changes per run.
+- **Config** — `config/config.yaml` at the repo root, loaded on every run (`--config` overrides). The input path is deliberately *not* in it, so the file never changes per run.
 
 **Config keys:**
 
