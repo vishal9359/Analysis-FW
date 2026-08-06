@@ -1,0 +1,41 @@
+blk_bio_queue_events {
+  generic_format {
+    timestamp: "Mon Jul 27 18:02:21 2026"
+    hostname: "spark-e97e"
+    component: 101
+    tag: "test2"
+    log_level: 0
+  }
+
+  payload {
+    read_splits: 0
+    write_splits: 0
+
+    read_4kb: 0
+    read_8kb: 0
+    read_16kb: 0
+    read_32kb: 0
+    read_64kb: 0
+    read_128kb: 0
+    read_256kb: 0
+    read_512kb: 0
+    read_1mb: 0
+    read_gt_1mb: 0
+    read_other: 0
+
+    write_4kb: 0
+    write_8kb: 0
+    write_16kb: 0
+    write_32kb: 0
+    write_64kb: 0
+    write_128kb: 0
+    write_256kb: 0
+    write_512kb: 0
+    write_1mb: 0
+    write_gt_1mb: 0
+    write_other: 0
+
+    read_bios: 0
+    write_bios: 0
+  }
+}

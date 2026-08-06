@@ -21,6 +21,8 @@ maintained** view lives in the docs above them:
 | `Analysis-FW-Module1-MVP-Requirements.md` | Trimmed MVP requirements for Module 1 | What the current loader was built to |
 | `Analysis-FW-Module1-Design.md` | Fuller/earlier Module 1 design | Design history; the maintained design is [../design.md](../design.md) |
 | `profile-log-format-details.txt` | The profiling **data-format spec** (the Profile FW ↔ Analysis FW seam) | Directly relevant to the loader |
+| `linux_block_1_stats_expected.txt` | A decoded sample of a real `linux_block_1_stats` record | Concrete format example |
+| `linux_block_2_misc_expected.txt` | A decoded sample of a real `linux_block_2_misc` record | Concrete format example |
 
 ## context/ — session hand-off notes (how we got here)
 
@@ -28,7 +30,9 @@ maintained** view lives in the docs above them:
 |---|---|
 | `CONTEXT-System-Analysis-FW-Session.md` | Master planning context: IO stack, streaming architecture, POC plan, decision ledger |
 | `CONTEXT-Database-Selection-Session.md` | The DB-selection reasoning, verified findings, rebalancing strategy, revisit triggers |
-| `POC1_Analysis_FW_Activities.md` | The detailed POC 1 activity plan (boss's 4 items + streaming study) |
+| `POC1_Analysis_FW_Activities.md` | The detailed POC 1 activity plan (boss's 4 items + streaming study) — **the current Analysis FW POC 1 plan** |
+| `POC1_Activities.md` (`-all-frameworks`) | The three-framework POC 1 split + **cross-engineer contracts** + integration demo + risks. Its Analysis section (AN1–AN13) is **superseded** by the file above, but the contracts and integration view are unique. |
+| `fake-profile-data-notes.md` | README of the retired dummy-data tooling. **Format is superseded** (old length-delimited `.log`), but kept for its **open data-contract issues** (epoch-vs-monotonic clock, 1-second timestamp resolution, record-size measurements) and per-layer payload-shape design. |
 
 > These two `CONTEXT-*` files are **session-organized** (a hand-off pattern). Their
 > durable content has been distilled into the topic-organized docs above; they are kept
@@ -44,6 +48,7 @@ maintained** view lives in the docs above them:
 | `Time-Series-Database-Decision.md` | Detailed decision doc (matrices, OSS vs Cloud, benchmarks) |
 | `Time-Series-Databases-Guide.md` | Full landscape + history reference |
 | `TimeSeries-Database-Research.md` | Background research |
+| `clickhouse-ha-cluster-test-commands.md` | A tested **ClickHouse HA cluster runbook** (docker-compose, `ReplicatedMergeTree ON CLUSTER`, replication/failover/Keeper tests). Useful for POC 2 activity C. |
 
 Current position and open issues (auto-rebalance, StarRocks/Doris revisit) are in
 [../decisions/0001-database-clickhouse.md](../decisions/0001-database-clickhouse.md).

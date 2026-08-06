@@ -13,6 +13,37 @@ today is **Module 1: an offline loader** that reads Profile FW protobuf profilin
 and writes it to ClickHouse, with the schema **derived from the producer's `.proto` at
 runtime**. Full charter: [docs/overview.md](docs/overview.md).
 
+## Context map — every context file
+
+```
+CLAUDE.md                     ← you are here: entry index + working rules
+README.md                     ← developer quickstart (install, run, test)
+docs/
+├── overview.md               ← charter: what/why, sub-frameworks, ownership, data shape
+├── architecture.md           ← end-to-end data flow; current MVP vs streaming target
+├── roadmap.md                ← POC 1 done · MVP now · POC 2 next · deferred · open questions
+├── glossary.md               ← domain terms (IO stack, eBPF, ids, DB, .pb format, streaming)
+├── design.md                 ← MVP loader design detail
+├── block-metrics.md          ← IOPS / bandwidth / latency query recipes
+├── timestamp-format.md       ← timestamp contract + parsing
+├── decisions/                ← ADRs — append-only; "why is it built this way?"
+│   ├── README.md             ← ADR index + how to add one
+│   └── 0001…0007-*.md        ← ClickHouse · runtime-schema · .pb-format · src-layout ·
+│                                id-stopgap · append-only · streaming-ladder
+└── reference/                ← imported snapshots from D:\Frameworks (SOURCE, not canonical)
+    ├── README.md             ← index of everything below
+    ├── requirements/         ← Frameworks.txt (source of truth), prod/module reqs,
+    │                            data-format spec + decoded samples
+    ├── context/              ← session context, POC 1 plans, cross-framework contracts,
+    │                            retired dummy-data notes
+    └── db-research/          ← ClickHouse decision + TSDB study + HA cluster runbook
+```
+
+**Reading order for a cold start:** this file → `docs/overview.md` →
+`docs/architecture.md` → `docs/roadmap.md`. Pull anything else from the map above or
+the task router below as the work needs it. `docs/reference/` is source material —
+where it and an ADR disagree, the ADR wins.
+
 ## Read-when map
 
 | If you're… | Read |

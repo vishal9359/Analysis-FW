@@ -77,3 +77,22 @@ memo. Proposed high-level activities (to confirm with the manager):
 
 Plus a dependency shift: **DGX Spark + the SUT fleet (separate NIC, non-SUT scratch
 disk) become required in POC 2**, where they were nice-to-have in POC 1.
+
+### Data-contract questions to settle with Profile FW
+
+Surfaced during the dummy-data work (details:
+[reference/context/fake-profile-data-notes.md](reference/context/fake-profile-data-notes.md)):
+
+- **Epoch vs monotonic clock (highest risk).** Real eBPF `bpf_ktime_get_ns()` is
+  **boot-relative, not epoch**. If Profile FW ships monotonic ns without a boot-time
+  offset, `ts` silently becomes "1970 + uptime" and time queries break silently.
+  Settle: are payload `*_ns` fields epoch, or monotonic + a boot offset in run config?
+- **Header timestamp is 1-second resolution** — cannot order events within a second,
+  yet it's the intended `ORDER BY` key. A `uint64 timestamp_ns` in the header is
+  wire-compatible to add later; cheaper to decide now.
+- **Record size ~179 B measured** (block 167 / nvme 140 / syscall 171 / filesystem
+  211), not the assumed ~80 B — moves the storage/retention math by ~2×. Re-measure
+  once the real payloads (spec §3.6–§3.11) exist.
+- **`run_config.log` contents** — a `seed` + `config_sha256` would make a run
+  reproducible from the log folder alone; `events_emitted`/`events_dropped` feed the
+  loss reconciliation. Currently empty by design.

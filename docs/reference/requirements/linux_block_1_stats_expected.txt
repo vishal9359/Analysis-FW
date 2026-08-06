@@ -1,0 +1,35 @@
+blk_dev_stats {
+  generic_format {
+    timestamp: "Monday July 27 18:01:46:233"
+    hostname: "spark-e97e"
+    component: 101
+    tag: "test1"
+    log_level: 0
+  }
+
+  block_device_stat {
+    device: "nvme0n1"
+
+    read_ios: 136479
+    reads_merged: 52679
+    sectors_read: 7081875
+    read_time_ms: 36432
+
+    write_ios: 761802
+    writes_merged: 575090
+    sectors_written: 78655766
+    write_time_ms: 2743360
+
+    in_flight_ios: 0
+    device_busy_time: 1040142
+    io_time: 2939688
+
+    discard_ios: 68744
+    discards_merged: 0
+    sectors_discarded: 7180517968
+    discard_time_ms: 73047
+
+    flush_ios: 66073
+    flush_time_ms: 86848
+  }
+}
