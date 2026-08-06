@@ -1,0 +1,187 @@
+# 1 Introduction
+
+We want to develop a framework called "System Analysis Framework" which can be used any type of SSD overheads while running various AI use-cases on GPU based desktop systems (like DGX spark and DGX workstation). This framework must do automatic setup of any type of AI workloads, configure the system (and SSD), execute AI use-cases, do profiling , do data collection and do processing or analysis, show the data on UI.
+Here analysis means analysis on the data collected to identify SSD/Host overheads and define overall system behavior (Host and SSD domains)
+
+This kind of framework is required for three projects, 
+one is "On Device AI" , second is "Tracevision", third is "UVP Control"
+
+In on device AI there can be n numer of AI use-cases on GPU based will be running, similary "Tracevision" and "UVP Control" side we would be having something to profiling which is not clear now but we will get clarity later.
+
+Since all three need similar kind of System Analysis Framework so we think lets develop single common or generic framework which can be used any storage related usecase.
+
+This System Analysis Framework is responsible to execute various use-cases (AI use-cases, enterprise storage) on AI based platforms or enterprise servers and do overall system analysis in host and SSD domains including identifying host system behavior, IO patterns, SSD behavior and system debugging. This document captures the requirements for system analysis framework. Requirements are arranged priority-wise where P1 items will be executed as a first release.
+
+---
+
+# 2 Requirements
+
+System analysis framework is divided into multiple sub-frameworks including Use-case run & deployment framework, Profile framework, Analysis framework, Tool deployment and UVP control framework. This document covers the requirements of Use-case run & deployment framework and Profile framework. Post deployment and profile framework is defined, analysis framework will be taken care.
+
+## 2.1 Use-case run and Deployment framework
+
+Use-case run and deployment framework is responsible to implement overall framework pipeline where it will deploy dependencies on the system, configure the system with pre-requisites and execute test-cases/use-cases. This framework will also get integrated with Profile framework for data collection. Below table describes the requirements.
+
+| S.No. | Category                          | Requirements                                                                                                                                                                                       | Priority |
+| ----- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 1     | Overall requirement               | Infra should support extending itself for new type of SUTs/Hosts for testing SSDs easily (enterprise servers, AI desktops and AI platforms)                                                        | P1       |
+|       |                                   | Infra should support deployment and configuration of the SUT Host/SSD before each test suite                                                                                                       |          |
+|       |                                   | Infra should support extending itself for different OS platforms                                                                                                                                   |          |
+|       |                                   | Infra should support extending itself for new AI use-cases and enterprise SSD use-cases                                                                                                            |          |
+|       |                                   | Framework should have its framework log file with pre-defined easy to read formats with timestamps and framework flows                                                                             |          |
+|       |                                   | Framework should support test case execution and log collection for both local SSD vs remote SSD storage JBOFs                                                                                     |          |
+|       |                                   | Infra should support AI benchmarks on DGX spark system                                                                                                                                             |          |
+|       |                                   | Infra should testing multiple SUTs (Host/SSD) in parallel                                                                                                                                          | P2       |
+|       |                                   | Infra should support long running tests for days to weeks                                                                                                                                          |          |
+|       |                                   | Infra should support automatic system recovery if it fails while executing any use-case                                                                                                            |          |
+|       |                                   | Infra should support AI benchmarks on other platforms (DGX workstation, AI server platforms)                                                                                                       |          |
+|       |                                   | Infra should support enterprise SSD use-cases on server platforms                                                                                                                                  |          |
+| 2     | Input Config file                 | Framework should support test-suite based configuration file which contain overall inputs for deployment, platform under test, pre-conditioning, baselining, use-case execution and log collection | P1       |
+|       |                                   | AI use-case based test-suites definition                                                                                                                                                           |          |
+|       |                                   | Enterprise SSD Storage based test-suites definition                                                                                                                                                | P2       |
+|       |                                   | Customer use-case oriented test-suites definition                                                                                                                                                  |          |
+|       |                                   | Framework should support parsing the input configuration suite file for parameter verification                                                                                                     |          |
+| 3     | Deployment and pre-conditioning   | Support deployment on Linux based systems                                                                                                                                                          | P1       |
+|       |                                   | Support Kernel parameters settings before test execution (CPU/Memory/GPU/OS)                                                                                                                       |          |
+|       |                                   | Support SSDs parameters / Set features settings before test execution                                                                                                                              |          |
+|       |                                   | Supports multiple SSD pre-conditioning types before test execution (best case, worst case, sprandom tool)                                                                                          |          |
+|       |                                   | Supports test-case specific scripts deployment and installation on SUT                                                                                                                             | P2       |
+|       |                                   | Supports scripts deployment on JBOFs if the SUT is connected to remote storage                                                                                                                     |          |
+|       |                                   | Support deployment on Windows based systems                                                                                                                                                        |          |
+|       |                                   | Support SSD custom firmware deployment                                                                                                                                                             |          |
+| 4     | Use-case execution engine         | Supports executing multiple use-cases on SUT in serial multiple times                                                                                                                              | P1       |
+|       |                                   | Supports SSD baselining with defined scripts                                                                                                                                                       |          |
+|       |                                   | Support deployment, Host/SSD settings, fault-injections and pre-conditioning of SSD at test case level                                                                                             |          |
+|       |                                   | Supports executing multiple use-cases in parallel on SUT                                                                                                                                           | P2       |
+|       |                                   | Supports use-case execution on multiple systems in parallel                                                                                                                                        |          |
+|       |                                   | Support executing test cases in random fashion with randomization of parameters                                                                                                                    |          |
+|       |                                   | Support replay of test case execution to reproduce the same system behavior                                                                                                                        |          |
+| 5     | Use-cases coverage                | Support AI benchmarks for Model Load, Fine-tune, Inference, Data science and Edge workloads through scripts available at NGC repository for DGX spark                                              | P1       |
+|       |                                   | Support AI benchmarks on other platforms                                                                                                                                                           | P2       |
+|       |                                   | Support enterprise SSD storage use-cases on AI platforms                                                                                                                                           |          |
+| 6     | Post-test Validations and Summary | Support post-test validation to check for any catastrophic and severe errors like system hung, system crash, SSD hung, memory leaks, error paths executed                                          | P1       |
+|       |                                   | Test execution summary with status - pass/fail, failure reason and additional info including execution time and use-case KPI measurement                                                           |          |
+
+
+         +--------------+   +--------------+   +--------------+   
+         | On Device AI |   | Trace Vision |   |     UVP      |   
+         +--------------+   +--------------+   +--------------+   
+                 \                |                 |             
+                  \_______________|_________________|
+                                  |
+                                  ▼
+
+     ┌──────────────────────────────────────────────────────────────────────────┐
+     │                 Host Stack Analysis FW                                   │
+     │                                                                          │
+     │        ┌─────────────────────┐        ┌────────────────────────┐         │
+     │        │ Tool Development &  │        │ Use Case run &         │         │
+     │        │ Deployment          │        │ Deployment FW          │         │
+     │        └─────────────────────┘        └────────────────────────┘         │
+     │                                                                          │
+     │        ┌──────────────┐   ┌──────────────┐   ┌────────────────┐          │
+     │        │ Profile FW   │   │ UVP Control  │   │ Analysis FW    │          │
+     │        └──────────────┘   └──────────────┘   └────────────────┘          │
+     │                                                   *FW = Framework        │
+     └──────────────────────────────────────────────────────────────────────────┘
+
+
+ ┌──────────────────┐          ┌──────────────────┐          ┌──────────────────┐
+ │ On Device AI     │          │ Trace Vision     │          │ UVP              │
+ │                  │          │                  │          │                  │
+ │ ┌──────────────┐ │          │ ┌──────────────┐ │          │ ┌──────────────┐ │
+ │ │ Profile FW   │ │          │ │ Profile FW   │ │          │ │ Profile FW   │ │
+ │ ├──────────────┤ │          │ ├──────────────┤ │          │ ├──────────────┤ │
+ │ │ Analysis FW  │ │          │ │ Analysis FW  │ │          │ │ UVP Control  │ │
+ │ ├──────────────┤ │          │ ├──────────────┤ │          │ ├──────────────┤ │
+ │ │ Use Case Run │ │          │ │ Tool Deploy. │ │          │ │ Use Case Run │ │
+ │ │ & Deploy FW  │ │          │ └──────────────┘ │          │ │ & Deploy FW  │ │
+ │ └──────────────┘ │          └──────────────────┘          │ └──────────────┘ │
+ └──────────────────┘                                        └──────────────────┘
+
+
+              Figure 1 - System Analysis Framework Components
+			  
+
+---
+
+# 2.2 Profile framework
+
+Profile framework is responsible for data collection in Host and SSD domains and maintain the log folder hierarchy with defined log formats.
+
+| S.No. | Category            | Requirements                                                                                               | Priority |
+| ----- | ------------------- | ---------------------------------------------------------------------------------------------------------- | -------- |
+| 1     | Overall requirement | Support data collection of host stack at various layers - Linux                                            | P1       |
+|       |                     | Support data collection for hardware components (CPU, GPU and memory)                                      |          |
+|       |                     | Support data collection of SSD from host OS                                                                |          |
+|       |                     | Profiling to cause no/minimal impact on overall performance, support to identify profiling overheads       |          |
+|       |                     | Support to define log data collection storage for minimal performance impact (in-RAM vs on-disk vs remote) |          |
+|       |                     | Support of APIs to collect the data out from SUT                                                           |          |
+|       |                     | Support data collection of SSD from JBOF / out-of-band                                                     | P2       |
+|       |                     | Support data collection of host stack - Windows                                                            |          |
+
+---
+
+| S.No. | Category                                  | Requirements                                                                                                                                               | Priority |
+| ----- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 2     | Tools identification and its capabilities | Explore IO trace tools (eBPF, blktrace, iostat, sysstat, for syscalls), file system tools (ext4), NVMe tools, CPU/GPU/memory tools for tool's capabilities | P1       |
+|       |                                           | Tools should be supported on DGX spark platform for Linux                                                                                                  |          |
+|       |                                           | Tools compatibility on other platforms including DGX workstation and Server platforms                                                                      | P2       |
+|       |                                           | File system tools support - XFS and others                                                                                                                 |          |
+|       |                                           | Windows OS tools support                                                                                                                                   |          |
+
+---
+
+| S.No. | Category                                                                      | Requirements                                                                                                                                                                                                                                                                                                                                                                                               | Priority |
+| ----- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| 3     | Define system behavior and parameters at various layers of host and SSD stack | Define parameters which will help understand system behavior and IO pattern of Host and SSD stack including async IO, cached IO, direct IO, latency analysis, protocol analysis, process-based stats, NVMe queue stats, Seq/Random, read/write, QD, Multi-core, LBA hotness, Detection of IO bursts, Latency distribution, CPU/GPU utilization, memory utilization, page faults, telemetry, admin commands | P1       |
+|       |                                                                               | Data collection parameters and behavior definition at host level for IOs (layers including syscalls, IO flags, VFS, Caching, Filesystem ext4, block-mq, IO scheduling, nvme driver)                                                                                                                                                                                                                        |          |
+|       |                                                                               | Data collection parameters and behavior definition at SSD layer                                                                                                                                                                                                                                                                                                                                            |          |
+|       |                                                                               | Data collection parameters and behavior definition at PCIe/RDMA layer                                                                                                                                                                                                                                                                                                                                      |          |
+|       |                                                                               | Windows OS based data collection and IO system behavior definition                                                                                                                                                                                                                                                                                                                                         | P2       |
+
+---
+
+| S.No. | Category                        | Requirements                                                              | Priority |
+| ----- | ------------------------------- | ------------------------------------------------------------------------- | -------- |
+| 4     | Script development requirements | Support REST API interfaces for data collection trigger, collect and stop | P1       |
+|       |                                 | Support to define log formats and log folder hierarchy                    |          |
+|       |                                 | Support to define data collection interval and necessary infra            |          |
+|       |                                 | Support data collection of system logs and SSD logs                       | P2       |
+|       |                                 | Windows OS based script development                                       |          |
+
+---
+
+| S.No. | Category                                                | Requirements                                                                              | Priority |
+| ----- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------- |
+| 5     | Definition of system analysis queries for data analysis | Define system analysis queries for system behavior (host and SSD) and IO pattern analysis | P1       |
+
+---
+
+# 3 Execution of On-Device AI project
+
+This section covers the execution plan and task breakup for On-Device AI.
+
+## 3.1 Yearly plan
+
+| Q2                                                | Q3                                                   | Q4                                    |
+| ------------------------------------------------- | ---------------------------------------------------- | ------------------------------------- |
+| System readiness with Presto drive on remote JBOF | Development of Use-case run and Deployment framework | System analysis and identify new POCs |
+| Validation of custom kernel on DGX spark          | Development of Profile framework                     | POCs development                      |
+| NAND AE team-work exploration                     | Development of Analysis framework                    |                                       |
+| Define SSD PoCs based on NAND AE team             | SSD PoCs development from NAND AE Team               |                                       |
+
+---
+
+# 3.2 Q3 plan
+
+| Category                          | July                                                                                                                                                                                                                     | Aug                                                                                                                                                                                                     | Sept                                                                                             |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Use-case and Deployment Framework | • Design of deployment, configuration and use-case run pipeline with framework logs<br>• AI use-cases run and compatibility check on DGX spark version 1 (model load, fine-tune and inference)                           | • Framework development with AI test-suite config, pre-condition, use-case run, summary and framework logs<br>• AI use-cases run and compatibility check on DGX spark version 2 (data science and edge) | • Framework development with deployment, configuration and multiple use-case runs with version 2 |
+| Profile framework                 | • Design of profile framework with tools, system behavior, parameters definition and query definition at different layers of stack (syscalls, VFS, FS, Block and NVMe)<br>• SSD parameters definition and behavior - TBD | • Development of Host and SSD data collection scripts<br>• API interfaces for data collection                                                                                                           | • Update scripts for data collection at PCIe / RDMA layer                                        |
+| Framework releases                |                                                                                                                                                                                                                          | **Framework release Version 1**<br>• Model load, Fine-tune and Inference AI use-cases<br>• Integration of profile framework for data collection                                                         | **Framework release Version 2**<br>• Data science and Edge workloads<br>• Automatic Deployment   |
+| Analysis framework                |                                                                                                                                                                                                                          | Design of analysis framework                                                                                                                                                                            | Development of analysis framework                                                                |
+| SSD PoCs                          | TBD                                                                                                                                                                                                                      | TBD                                                                                                                                                                                                     | TBD                                                                                              |
+
+---
+

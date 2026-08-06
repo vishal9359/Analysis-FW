@@ -7,6 +7,14 @@ writes it to typed ClickHouse tables — completely, correctly, and repeatably.
 The schema is derived from the producer's `.proto` at runtime, so new fields,
 new layers, and new producers need **no code change**.
 
+> **Project context** — this README is the developer quickstart. For the full
+> picture (why the project exists, where it's going, and why it's built this way)
+> start at [CLAUDE.md](CLAUDE.md), then [docs/overview.md](docs/overview.md),
+> [docs/architecture.md](docs/architecture.md), [docs/roadmap.md](docs/roadmap.md),
+> and the decision records in [docs/decisions/](docs/decisions/). Imported
+> requirements, planning context, and DB research are under
+> [docs/reference/](docs/reference/).
+
 ## Architecture
 
 ```

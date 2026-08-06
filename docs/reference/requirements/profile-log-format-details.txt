@@ -1,0 +1,227 @@
+2 Log format
+
+Data collection by profile framework can be done in two ways.
+
+Offline data collection in which it collects the data in files and stores in
+local disk in predefined log folder hierarchy. Later this is consumed by
+analysis framework for offline data analysis.
+
+Another is online data collection where profile framework exports the data
+streams to external entities like analysis framework. Analysis framework
+consumes the live data and perform system analysis.
+
+This section contains the log format which should be applicable to both kind
+of data collection. There is single log format applicable for both the
+methods of data collection.
+
+
+2.1 Offline collection log folder hierarchy
+
+In offline data collection, profile data will be collected at the SUT
+pre-defined path. Here each type of data will be collected in different
+folder. There will be one or more files in which data will be collected. Log
+rotation will be implemented in logger module.
+
+Profile FW will profile data from kernel using multiple methods like bpf, iostat tool , any other tool so 
+One layer can have multiple types of proto files and corresponding protobuf(binary) data
+and one protobuf binary data can be splited into n files because becasue 1 file can be big file
+so Profile FW can keep name convention such a way that we can understand that this this protobuf file is based on this this proto file, you can suggest the naming convention 
+so our read doing should be smart that it can read 1 type of  layer1 of data and write into 1 table then read 2nd type of layer1 data write into another table and so on
+
+ProfileData-<tag>-<timestamp>
+    Config
+        run_config.log
+    Linux
+        Block
+            linux_block_1_stats.proto
+			linux_block_2_misc.proto
+            linux_block_1_stats.pb
+			linux_block_2_misc.pb
+         NVMe
+            linux_nvme_1_stats.proto
+			linux_nvme_2_lbahotness.proto
+            linux_nvme_3_lbarandomness.proto
+            linux_nvme_1_stats.pb
+			linux_nvme_2_lbahotness.pb
+            linux_nvme_3_lbarandomness.pb
+        Syscall
+            linux_syscall_1_stats.proto
+			linux_syscall_2_ioflags.proto
+            linux_syscall_1_stats.pb
+			linux_syscall_2_ioflags.pb
+        Platform
+            linux_platform_1_hwutil.proto
+            linux_platform_1_hwutil.pb
+        Memory
+            TBD
+        Filesystem
+            TBD
+    SSD
+		TBD
+
+
+3 Log format
+
+This section contains the log format for all kind of data supported by
+Profile and Analysis framework. Profile data will be transferred to remote
+node in protobuf format. Both sender and receiver will have proto files.
+Proto file is the foundation of gRPC with protobuf. It is language
+independent format to be shared by client and server machines. For different
+type of data, there will be different proto structures (block, file, memory,
+SSD, nvme). Format of proto is divided into generic format and component
+specific format.
+
+here is the log format:
+
+<Timestamp> <Hostname> <Component> <Tag> <LogLevel> <Component specific
+format>
+
+
+3.1 Timestamp
+
+Timestamp format is as follows
+
+Day Mon Date HH:MM:SS Year
+
+Example - [Sat Jun 27 14:40:48 2026]
+
+
+3.2 Hostname
+
+Hostname is the name of the SUT machine from where this data is collected. It
+is in form of a string.
+
+cat /etc/hostname
+
+
+3.3 Component
+
+Component is integer value for each defined component
+
+Component                     Integer
+
+Linux Block layer             1
+Linux NVMe layer              2
+Linux syscall layer           3
+Linux filesystem layer        4
+Linux memory layer            5
+SSD                           6
+TBD | Others                  TBD
+
+
+3.4 Tag
+
+Tag is used to tag the profile data(string) with user-defined tags. It is passed to
+the profile framework through API calls (or as boot-up parameter). User can
+associate any tag before data collection. It can be used to differentiate
+between various runs. Once tags are set, new profile data from here-on will
+be marked with current tag.
+
+
+3.5 Log level
+
+Log Level    Integer Value    Uses
+
+ERROR        1    Profile framework data collection failed, Useful for UVP to
+                  report any errors, fatal conditions
+
+WARN         2    Useful for UVP control path data collection to report warnings,
+                  kernel traces
+
+INFO         3    Profile framework default logs, UVP default logs
+
+DEBUG        4    Detailed logs, it may be useful for UVP control path data
+                  collection
+
+
+3.6 Linux block log format
+
+TBD
+
+Check if Prefix is required (sub-category)
+
+
+3.7 Linux NVMe log format
+
+TBD
+
+Check if Prefix is required (sub-category)
+
+
+3.8 Linux syscall log format
+
+TBD
+
+Check if Prefix is required (sub-category)
+
+
+3.9 Linux filesystem log format
+
+TBD
+
+Check if Prefix is required (sub-category)
+
+
+3.10 Linux memory log format
+
+TBD
+
+Check if Prefix is required (sub-category)
+
+
+3.11 SSD log format
+
+TBD
+
+Check if Prefix is required (sub-category)
+
+
+4 Proto files
+
+This section describes various proto files and its contents.
+
+
+Type of Data               Proto file
+
+Linux Block layer          linux_block_1_stats.proto, linux_block_2_misc.proto
+Linux NVMe layer           linux_nvme_1_stats.proto, linux_nvme_2_lbahotness.proto, linux_nvme_3_lbarandomness.proto
+Linux syscall layer        linux_syscall_1_stats.proto, linux_syscall_2_ioflags.proto
+Linux filesystem layer     TBD
+Linux memory layer         TBD
+
+Platform
+
+(CPU, GPU, memory utilization)
+
+platform.proto
+
+SSD                        ssd.proto
+
+TBD - Others
+
+
+Sample format for LinuxBlock Component:
+
+message LinuxBlock
+{
+
+    string timestamp = 1;
+
+    string hostname = 2;
+
+    uint32 component = 3;
+
+    uiint32 tag = 4;
+
+    uint32 loglevel = 5;
+
+    message Payload
+    {
+
+        // TBD for component specific data
+
+    }
+
+    Payload payload = 6;
+
+}
