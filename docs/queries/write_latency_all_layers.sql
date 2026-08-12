@@ -1,33 +1,27 @@
 -- Average WRITE latency across layers (syscall, block, nvme), per-second.
+-- Output is WIDE: one column per layer (`syscall write`, `block write`, `nvme write`),
+-- pivoted with max(if(metric=...)) so a Grafana time series shows one line per layer.
 --
--- Latency = accumulated service time / IO count, both taken as per-second deltas
--- (Δtime / Δios). This is the "await" definition -- correct even when IOs overlap
--- (queue depth > 1), unlike 1/IOPS.
+-- Latency = accumulated service time / IO count, both as per-second deltas
+-- (Δtime / Δios) -- the "await" definition, correct even at queue depth > 1.
 --
---   write_latency = Δwrite_time / Δwrite_ios
+-- UNITS: values are in MICROSECONDS (µs). Source units differ per layer, so each
+-- is converted to µs:
+--   block / nvme : *_time_ms is milliseconds -> µs is  d_time * 1000 / d_ios
+--   syscall      : total_time is nanoseconds -> µs is  d_time / (d_ios * 1000)
+-- Confirm each source unit on the box; if one differs, fix that layer's factor:
+--   ms->µs = *1000, ns->µs = /1000, s->µs = *1e6, already-µs = *1.
 --
--- One CTE per layer computes the deltas within its own window; `ORDER BY time
--- OFFSET 1` drops that series' first (deltaless) row -- its lag is 0, so its raw
--- delta would be the whole counter (a false spike). nullIf(Δios, 0) makes a
--- second with no writes NULL (a gap) instead of a divide-by-zero.
---
--- Column mapping per layer:
---   syscall : total_time / io_count for WRITE rows (io_type = 5) in the child table
---   block   : write_time_ms / write_ios
---   nvme    : write_time_ms / write_ios
--- (SSD omitted: SMART data has no per-command service time.)
+-- One CTE per layer computes the deltas in its own window; `ORDER BY time OFFSET 1`
+-- drops that series' first (deltaless) row. if(d_ios = 0, NULL, ...) makes an idle
+-- second a gap instead of a divide-by-zero.
 --
 -- OFFSET 1 drops exactly ONE row per CTE, so it assumes a single series per layer
--- (one run_id / host / device). With multiple devices or hosts, each series' first
--- row must be dropped instead -- use a `prev IS NOT NULL` guard per partition.
+-- (one run_id / host / device). With multiple devices or hosts, drop each series'
+-- first row with a `prev IS NOT NULL` guard per partition instead.
 --
 -- io_type = 5 is plain write() only; if the workload uses writev / pwrite / io_uring
 -- writes, sum io_count and total_time over io_type IN (5,6,7,8,16,17,18) first.
---
--- UNITS -- read before trusting the syscall series:
---   block / nvme *_time_ms are milliseconds, so write_latency_ms is in ms.
---   syscall total_time unit is NOT ms in general (eBPF tracers usually emit ns).
---   Confirm the unit; if ns, wrap the syscall time with `/ 1e6` to get ms.
 --
 -- Grafana form (uses $__timeFilter). For clickhouse-client:
 --   USE profile_fw;  drop the `profile_fw.` prefixes,
@@ -68,9 +62,18 @@ nvme_delta AS
     ORDER BY time
     OFFSET 1
 )
-SELECT time, 'syscall' AS layer, round(d_time / nullIf(d_ios, 0), 3) AS write_latency_ms FROM syscall_delta
-UNION ALL
-SELECT time, 'block'   AS layer, round(d_time / nullIf(d_ios, 0), 3) AS write_latency_ms FROM block_delta
-UNION ALL
-SELECT time, 'nvme'    AS layer, round(d_time / nullIf(d_ios, 0), 3) AS write_latency_ms FROM nvme_delta
-ORDER BY time, indexOf(['syscall', 'block', 'nvme'], layer)
+SELECT
+    time,
+    max(if(metric = 'syscall write', value, NULL)) AS `syscall write`,
+    max(if(metric = 'block write',   value, NULL)) AS `block write`,
+    max(if(metric = 'nvme write',    value, NULL)) AS `nvme write`
+FROM
+(
+    SELECT time, 'syscall write' AS metric, if(d_ios = 0, NULL, round(d_time / (d_ios * 1000), 3)) AS value FROM syscall_delta
+    UNION ALL
+    SELECT time, 'block write'   AS metric, if(d_ios = 0, NULL, round(d_time * 1000 / d_ios,   3)) AS value FROM block_delta
+    UNION ALL
+    SELECT time, 'nvme write'    AS metric, if(d_ios = 0, NULL, round(d_time * 1000 / d_ios,   3)) AS value FROM nvme_delta
+)
+GROUP BY time
+ORDER BY time
