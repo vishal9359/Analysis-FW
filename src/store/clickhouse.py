@@ -99,15 +99,6 @@ class ClickHouseStore:
         except Exception as exc:
             raise DatabaseError(f"insert into {table} failed: {exc}") from exc
 
-    def count(self, table: str, run_id: str, sut_id: str) -> int:
-        try:
-            return int(self._client.command(
-                f"SELECT count() FROM `{table}` "
-                f"WHERE run_id = {{r:String}} AND sut_id = {{s:String}}",
-                parameters={"r": run_id, "s": sut_id}))
-        except Exception as exc:
-            raise DatabaseError(f"count on {table} failed: {exc}") from exc
-
     def close(self) -> None:
         if self._client is not None:
             self._client.close()

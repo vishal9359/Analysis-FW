@@ -35,6 +35,9 @@ class MemoryStore:
         self.tables.setdefault(table, []).extend(tuple(r) for r in rows)
 
     def count(self, table: str) -> int:
+        """Test helper — deliberately NOT part of the Store protocol. Row counts
+        for reconciliation come from the loader (UnitResult.table_rows); a
+        DB-side count belongs with the future reload coordinator (ADR-0006)."""
         return len(self.tables.get(table, []))
 
     def close(self) -> None:
