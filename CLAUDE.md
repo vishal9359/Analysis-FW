@@ -9,15 +9,17 @@ content here.
 **Analysis FW** — the analysis half of a **System Analysis Framework** that profiles
 SSD/host IO overheads for AI workloads on GPU systems (DGX Spark). Analysis FW owns
 everything **from the SUT outward**: ingest → ClickHouse → queries → UI. The code
-today is **Module 1: an offline loader** that reads Profile FW protobuf profiling data
-and writes it to ClickHouse, with the schema **derived from the producer's `.proto` at
-runtime**. Full charter: [docs/overview.md](docs/overview.md).
+today is **Module 1: an offline loader** (written in **Go**) that reads Profile FW
+protobuf profiling data and writes it to ClickHouse, with the schema **derived from
+the producer's `.proto` at runtime** — parsed in pure Go, so the build has no
+`protoc` dependency and ships as a single static binary.
+Full charter: [docs/overview.md](docs/overview.md).
 
 ## Context map — every context file
 
 ```
 CLAUDE.md                     ← you are here: entry index + working rules
-README.md                     ← developer quickstart (install, run, test)
+README.md                     ← developer quickstart (build, run, test)
 docs/
 ├── overview.md               ← charter: what/why, sub-frameworks, ownership, data shape
 ├── architecture.md           ← end-to-end data flow; current MVP vs streaming target
@@ -28,8 +30,9 @@ docs/
 ├── timestamp-format.md       ← timestamp contract + parsing
 ├── decisions/                ← ADRs — append-only; "why is it built this way?"
 │   ├── README.md             ← ADR index + how to add one
-│   └── 0001…0007-*.md        ← ClickHouse · runtime-schema · .pb-format · src-layout ·
-│                                id-stopgap · append-only · streaming-ladder
+│   └── 0001…0009-*.md        ← ClickHouse · runtime-schema · .pb-format · layout ·
+│                                id-stopgap · append-only · streaming-ladder ·
+│                                database-seam · go-implementation
 └── reference/                ← imported snapshots from D:\Frameworks (SOURCE, not canonical)
     ├── README.md             ← index of everything below
     ├── requirements/         ← Frameworks.txt (source of truth), prod/module reqs,
@@ -60,26 +63,30 @@ where it and an ADR disagree, the ADR wins.
 
 ## Status (keep this current)
 
-- **Now:** Module 1 offline loader — **built, 22 tests pass**, in good shape.
+- **Now:** Module 1 offline loader — **Go, 28 tests pass**, in good shape. The
+  Python implementation was replaced ([ADR-0009](docs/decisions/0009-go-implementation.md)).
 - **Next:** POC 2 — live streaming ingestion at fleet scale (see [docs/roadmap.md](docs/roadmap.md)).
 - **Deferred debt** (all tracked in ADRs): append-only reload, single-node
-  `run_id`/`record_id`, schema auto-migrate.
+  `run_id`/`record_id`, schema auto-migrate, `dynamicpb` decode throughput.
 
 ## Working rules (this repo's conventions)
 
-- **Run it:** `python -m src <ProfileData-dir>` **from the repo root** (the package is
-  `src/`; there is deliberately no `pyproject.toml` — see
-  [ADR-0004](docs/decisions/0004-src-layout-and-external-config.md)). Batch: point at a
-  parent of `ProfileData-*` runs; `--batch`, `--continue-on-error`.
-- **Config:** `config/config.yaml` (repo root, editable). Override with `--config PATH`
-  or `CH_HOST`/`CH_PORT` env.
-- **Test:** `python -m pytest tests/ -q` — runs the whole pipeline against an in-memory
-  store, **no database needed**. Regenerate the fixture with
-  `python tests/make_fixture.py <dir>`.
+- **Build:** `go build -o bin/ ./cmd/...` (Go 1.18+; no `protoc`, no other toolchain).
+  Cross-compile: `GOOS=linux GOARCH=amd64 go build -o bin/analysis-fw ./cmd/analysis-fw`.
+- **Run it:** `./bin/analysis-fw <ProfileData-dir>`. Batch: point at a parent of
+  `ProfileData-*` runs; `-batch`, `-continue-on-error`.
+- **Config:** `config/config.yaml` (repo root, editable). Override with `-config PATH`
+  or `CH_HOST`/`CH_PORT` env. **Port 9000** — the Go driver speaks ClickHouse's
+  *native* protocol, not HTTP 8123.
+- **Test:** `go test ./...` — runs the whole pipeline against an in-memory store,
+  **no database needed**. The fixture is generated from `testdata/protos/` at test
+  time; `./bin/mkfixture` writes one to disk.
 - **Schema is generic:** never hardcode payload/header field names in the loader — it
-  derives everything from the `.proto` by structure. protobuf 7.x: use
-  `FieldDescriptor.is_repeated` (not `.label`). See
-  [ADR-0002](docs/decisions/0002-runtime-schema-from-proto.md).
+  derives everything from the `.proto` by structure, via `protocompile` + `dynamicpb`.
+  See [ADR-0002](docs/decisions/0002-runtime-schema-from-proto.md).
+- **Database seam:** adding a database is one adapter under `internal/store/` plus one
+  line in `internal/store/factory`. Nothing above the seam may name a SQL type or
+  dialect — see [ADR-0008](docs/decisions/0008-database-seam.md).
 - **Ingest is append-only** (re-loading a run duplicates rows) — see
   [ADR-0006](docs/decisions/0006-mvp-append-only-ingest.md).
 - **Timestamps** stored as RFC 3339 UTC; the loader tolerates several formats and
@@ -89,11 +96,13 @@ where it and an ADR disagree, the ADR wins.
 
 ## Environment
 
-- **This dev machine:** Windows; **no ClickHouse here** — validate DB behavior via the
-  in-memory store and tests. The real ClickHouse insert is verified on the office box.
-- **Office test box:** Linux (IST timezone), Python 3.12, **ClickHouse 25.6 in Docker
-  at `localhost:8123`, no password, database `profile_fw`**. The user pulls the repo
-  there to run against real data.
+- **This dev machine:** Windows; Go 1.18.2; **no ClickHouse here** — validate DB
+  behavior via the in-memory store and tests. The real ClickHouse insert is verified
+  on the office box.
+- **Office test box:** Linux (IST timezone), **ClickHouse 25.6 in Docker**, no
+  password, database `profile_fw`. The Go driver uses the **native port 9000** (the
+  standard image serves both 8123 and 9000). The user pulls the repo there to run
+  against real data.
 
 ## How this project's context is organized (so it scales)
 

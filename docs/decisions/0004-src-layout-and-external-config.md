@@ -1,6 +1,8 @@
 # 0004 — `src/` layout, editable `config/config.yaml`, no packaging
 
-**Status:** Accepted.
+**Status:** Superseded by [ADR-0009](0009-go-implementation.md) for the layout
+(the Go port uses `cmd/` + `internal/`). The **editable `config/config.yaml`**
+decision carries forward unchanged.
 
 ## Context
 

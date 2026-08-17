@@ -1,0 +1,6 @@
+# build output
+/bin/
+*.exe
+
+# generated fixtures
+/testdata/_fixture/

@@ -35,7 +35,11 @@ writes it to typed ClickHouse tables — completely, correctly, repeatably. The 
 is **derived from the producer's `.proto` at runtime**, so new fields / layers /
 producers need no code change.
 
-Pipeline (each stage a module under `src/`; full code map is in the
+Written in **Go** ([ADR-0009](decisions/0009-go-implementation.md)): the `.proto` is
+parsed in pure Go, so there is no `protoc` dependency and the loader ships as a
+single static binary. Units load concurrently on a bounded goroutine pool.
+
+Pipeline (each stage a package under `internal/`; full code map is in the
 [README](../README.md)):
 
 ```
@@ -46,6 +50,8 @@ discover → registry → reader → worker → store
 - **reader** — parse each `.pb` (one wrapper message), iterate records.
 - **worker** — flatten a record → row(s): scalars → main table, repeated → child tables.
 - **store** — create tables if absent; batched INSERT (ClickHouse; in-memory for tests).
+  This is the **database seam**: nothing above it names a SQL type or dialect, so
+  swapping databases is one new adapter ([ADR-0008](decisions/0008-database-seam.md)).
 
 Design rationale is in [design.md](design.md); the block-metric queries in
 [block-metrics.md](block-metrics.md); timestamp handling in
@@ -82,6 +88,9 @@ Full format notes: [reference/requirements/profile-log-format-details.txt](refer
   See [ADR-0005](decisions/0005-uint64-ids-stopgap.md).
 - **Schema evolution** — adding a column to an existing table needs a one-time
   `ALTER TABLE ADD COLUMN` (auto-migrate deferred).
+- **Decode throughput** — dynamic protobuf messages (`dynamicpb`) cost ~1.7× a
+  generated-struct path. Irrelevant at current volumes; the revisit trigger and
+  measurements are in [ADR-0009](decisions/0009-go-implementation.md).
 
 ## Production target (POC 2) — live streaming, never-block
 

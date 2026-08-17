@@ -1,20 +1,21 @@
-# Analysis FW — Module 1 bundled config.
-# Always loaded from inside the module. The input path is NOT here — it is the
-# one command-line argument, passed per run (by Airflow or by hand).
+# Analysis FW — Module 1 config.
+# Edited in place by an operator; the input path is NOT here — it is the one
+# command-line argument, passed per run (by Airflow or by hand).
 
 producer:
   name: profile_fw          # label, used in logs/summary
-  database: profile_fw      # ClickHouse database to write into (one per producer)
+  database: profile_fw      # database to write into (one per producer)
 
 # Records are read from each .pb as one wrapper message with a repeated field
 # (the repeated encoding delimits records internally) — no framing option needed.
 
 store:
-  kind: clickhouse          # which adapter (see src/store/factory.py)
+  kind: clickhouse          # which adapter (see internal/store/factory)
   host: localhost           # overridable by env CH_HOST
-  port: 8123                # overridable by env CH_PORT (ClickHouse HTTP)
+  port: 9000                # ClickHouse NATIVE protocol (not the 8123 HTTP port),
+                            # overridable by env CH_PORT
   batch_size: 100000        # rows per insert
-  workers: 4                # process-pool size (how many .pb files load at once)
+  workers: 4                # how many units load concurrently (goroutines)
   options:                  # adapter-specific settings
     async_insert: false     # ClickHouse: must stay false so row counts are truthful
 

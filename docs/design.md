@@ -1,6 +1,13 @@
 # Analysis Framework — Module 1 (MVP) — High-Level Design
 
-**Date:** 2026-07-21 · **Implements:** `Analysis-FW-Module1-MVP-Requirements.md` · **Python 3.12+, ClickHouse**
+**Date:** 2026-07-21 · **Implements:** `Analysis-FW-Module1-MVP-Requirements.md` · **Go 1.18+, ClickHouse**
+
+> This is the MVP design as agreed, kept as the reasoning record. The **current**
+> architecture is [architecture.md](architecture.md); where they differ, that
+> document and the [ADRs](decisions/) win. Notably: the implementation is Go
+> ([ADR-0009](decisions/0009-go-implementation.md)), the store is a full seam
+> ([ADR-0008](decisions/0008-database-seam.md)), and the partition key is
+> `run_id` alone (no `sut_id` column exists).
 
 ---
 
@@ -36,9 +43,9 @@ No reload, no partition drop, no DB-side reconcile in MVP — those come with th
 ## 3. Parallelism  *(decision to confirm)*
 
 - **Unit of work = one `.pb` file** (a split part, or a whole single file). Handles "one type is huge, split into N" — every part is an independent job.
-- **Process pool, not threads.** Protobuf decode is CPU-bound; Python's GIL makes threads serialize it. Processes give real parallel decode. *(Same CPU-bound reason behind the "Go later" plan.)*
-- **Workers are fully independent** — each opens its own ClickHouse connection, inserts its own rows, returns only small counts. No shared state, no ordering constraint (append-only), so no coordination is needed to run them in parallel.
-- Pool size is configurable; concurrent inserts to the same table are fine in ClickHouse.
+- **A bounded goroutine pool.** Protobuf decode is CPU-bound; Go has no GIL, so goroutines give real parallel decode in one process — the schema is compiled once and shared, and one pooled connection serves every worker. *(The original Python design needed a process pool for the same parallelism; see [ADR-0009](decisions/0009-go-implementation.md).)*
+- **Workers are fully independent** — each inserts its own rows and returns only small counts. No shared state, no ordering constraint (append-only), so no coordination is needed to run them in parallel.
+- Pool size is configurable (`store.workers`); concurrent inserts to the same table are fine in ClickHouse.
 
 ## 4. Schema → table
 
@@ -46,12 +53,12 @@ No reload, no partition drop, no DB-side reconcile in MVP — those come with th
 - **Table name = file stem** (`block_type1`), so multiple types per layer land in separate tables automatically.
 - Columns = fixed header columns + one column per payload scalar (name preserved, protobuf type → ClickHouse type).
 - Each `.proto` compiled into its **own descriptor pool** — isolates any package/message-name reuse across types.
-- `ENGINE = MergeTree PARTITION BY (run_id, sut_id) ORDER BY (run_id, sut_id, ts)`.
-  *(The `(run_id, sut_id)` partition is already what the future coordinator will drop for clean reload — nothing is lost by deferring it.)*
+- `ENGINE = MergeTree PARTITION BY run_id ORDER BY (run_id, hostname, ts)`.
+  *(The `run_id` partition is already what the future coordinator will drop for clean reload — nothing is lost by deferring it.)*
 
 ## 5. Integrity (MVP scope)
 
-- `run_id` = directory name; `sut_id` = header hostname; both stored as columns.
+- `run_id` = directory name; the SUT is identified by the header's `hostname` column.
 - `async_insert` off, so post-load counts are truthful.
 - Each worker reports rows read vs inserted; the summary aggregates them. A per-worker read≠inserted is a failure.
 - Any worker failure → whole load fails (non-zero exit).
@@ -64,10 +71,11 @@ The config file lives at **`config/config.yaml`** (repo root), separate from the
 ```yaml
 # config/config.yaml  (repo root, editable)
 producer: { name: profile_fw, database: profile_fw }
-store:    { host: localhost, port: 8123,
-            batch_size: 100000, workers: 6, async_insert: false }
+store:    { kind: clickhouse, host: localhost, port: 9000,
+            batch_size: 100000, workers: 4,
+            options: { async_insert: false } }
 logging:  { level: INFO, format: json }
-# DB creds NOT here — from env (CH_USER / CH_PASSWORD)
+# DB creds NOT here — the target uses the default user
 ```
 
 - **Secrets stay out of the file** — credentials come from env, so the config carries no passwords.
@@ -81,34 +89,37 @@ See §8 for what each key means.
 ```
 config/
   config.yaml       editable config (repo root; loaded on every run)
-src/
-  cli.py            input-path arg, exit codes, JSON summary, fan-out to the pool
-  config.py         load config + validate; creds/host from env, --config override
-  discover.py       tree walk, stem grouping, .proto/.pb pairing
-  registry.py       proto compile, table + column derivation
-  reader.py         parse a .pb wrapper, yield records
-  worker.py         one .pb: read -> decode -> batch -> insert
-  runner.py         run one directory (units in parallel) and batches of runs
-  store/
-    base.py         Store interface
-    clickhouse.py   DDL (create db/table), batch insert, count
-    memory.py       in-memory Store (tests)
+cmd/
+  analysis-fw/      input-path arg, exit codes, JSON summary, fan-out to the pool
+  mkfixture/        simulated-data generator
+internal/
+  config/           load config + validate; host from env, -config override
+  discover/         tree walk, stem grouping, .proto/.pb pairing
+  registry/         pure-Go proto compile, table + neutral-column derivation
+  reader/           parse a .pb wrapper, yield records
+  worker/           one .pb: read -> decode -> batch -> insert
+  runner/           run one directory (units in parallel) and batches of runs
+  store/            the database seam
+    store.go        Store interface + neutral ColumnType
+    factory/        the one place an adapter is named
+    clickhouse/     DDL (create db/table), batch insert
+    memory/         in-memory Store (tests)
 docs/               design, block-metrics, timestamp-format
-tests/
+testdata/protos/    bundled sample .proto files
 ```
 
-No `coordinator.py`. `cli.py` just fans units out to the pool and collects their returned counts — no reload/drop/reconcile logic.
+No coordinator package. `cmd/analysis-fw` just fans units out to the pool and collects their returned counts — no reload/drop/reconcile logic.
 
 ## 8. Invocation & config
 
 **One argument — the input path. The config loads from `config/config.yaml`.**
 
 ```
-python -m src <input_dir>        # run from the repo root; same for CLI and Airflow
+analysis-fw <input_dir>          # same for CLI and Airflow
 ```
 
 - **`<input_dir>`** — the `ProfileData-*` directory for *this* run. Airflow templates it each run (e.g. from the profiling task's XCom).
-- **Config** — `config/config.yaml` at the repo root, loaded on every run (`--config` overrides). The input path is deliberately *not* in it, so the file never changes per run.
+- **Config** — `config/config.yaml` at the repo root, loaded on every run (`-config` overrides). The input path is deliberately *not* in it, so the file never changes per run.
 
 **Config keys:**
 
@@ -116,26 +127,28 @@ python -m src <input_dir>        # run from the repo root; same for CLI and Airf
 |---|---|
 | `producer.name` | Label for the producer (Profile FW / UVP / TraceVision), used in logs/summary. |
 | `producer.database` | Which ClickHouse database to write into — one per producer, so component ids never collide. |
-| `store.host` / `store.port` | ClickHouse HTTP endpoint. Overridable by env (`CH_HOST` / `CH_PORT`). |
+| `store.kind` | Which store adapter to build (see `internal/store/factory`). |
+| `store.host` / `store.port` | ClickHouse **native** endpoint (9000). Overridable by env (`CH_HOST` / `CH_PORT`). |
 | `store.batch_size` | Rows per insert — bounds worker memory and tunes insert efficiency. |
-| `store.workers` | Process-pool size (how many `.pb` files load at once). |
-| `store.async_insert` | Must be `false` so counts are truthful. |
+| `store.workers` | How many units load concurrently (goroutines). |
+| `store.options` | Adapter-specific settings; ClickHouse's `async_insert` must stay `false` so counts are truthful. |
 | `logging.level` / `logging.format` | Log verbosity and JSON vs text. |
-| `CH_USER` / `CH_PASSWORD` *(env, not in file)* | DB credentials — kept out of the config file. |
 
 Not needed: proto location (protos ship in the tree) and any component→table mapping (table = file stem, derived).
 
 ## 9. Build order
 
 1. discover + registry (table/column derivation) — no DB, unit-testable.
-2. framing + worker decode path — verify against POC-generated data.
-3. ClickHouse store — DDL, batch insert, count.
+2. reader + worker decode path — verify against generated fixture data.
+3. ClickHouse store — DDL, batch insert.
 4. cli fan-out (pool) + config + JSON summary.
 5. throughput measurement.
 
+*(All five are done; see [architecture.md](architecture.md) for the built system.)*
+
 ## 10. Decisions to confirm in review
 
-1. **Process pool, unit = one `.pb` file** (§3) — vs threads, or per-type workers.
+1. **Bounded goroutine pool, unit = one `.pb` file** (§3) — vs per-type workers.
 2. **Payload is nested in field 6, scalars flattened to columns** (§4) — matches the spec; confirm the real type-protos follow it.
 3. **MVP is append-only — no clean reload** (§5) — re-running duplicates; drop/replace deferred to the coordinator. Confirm that's acceptable for now.
 ```

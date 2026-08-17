@@ -147,6 +147,6 @@ ORDER BY time
 
 ## Try it on simulated data
 
-`tests/make_fixture.py` generates a per-second time series with monotonic
+`mkfixture` generates a per-second time series with monotonic
 counters, so these queries work end-to-end without waiting for real profiling —
 see the README's "Generate simulated data" section.

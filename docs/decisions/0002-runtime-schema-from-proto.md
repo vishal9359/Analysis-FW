@@ -21,12 +21,18 @@ Detection is by **structure and field name**, not by message name (see
 - A new payload field / new layer / new producer needs **no code change** — the loader
   reads the shipped `.proto` and adapts. (A new field on an *existing* table still
   needs a one-time `ALTER TABLE ADD COLUMN`; auto-migrate is deferred.)
-- Implementation notes that must not be lost:
+- **Since [ADR-0009](0009-go-implementation.md)** the `.proto` is parsed in
+  pure Go (`bufbuild/protocompile`) with dynamic messages (`dynamicpb`) — no
+  `protoc` binary at build or run time. The cost is that `dynamicpb` is slower
+  than a generated-struct path; see ADR-0009 for the measurements and the
+  revisit trigger.
+- Implementation notes from the original Python implementation (kept for the
+  historical record):
   - protobuf 7.x: use `FieldDescriptor.is_repeated`, **not** `.label`;
     `UnknownFields()` is unavailable on upb dynamic classes.
   - Descriptor **bytes** are picklable (safe to send to worker processes); message
     **classes** are not — so detection is rebuilt from bytes in each worker.
   - Each `.proto` is compiled in its **own** descriptor pool, so identical message
     names across producers never collide.
-- The derivation lives in one place (`src/registry.py`) and is unit-tested against the
-  real bundled protos.
+- The derivation lives in one place (`internal/registry`) and is unit-tested
+  against the real bundled protos.
