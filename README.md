@@ -19,6 +19,8 @@ The result is a single static binary.
 
 ## Architecture
 
+### Where this sits
+
 ```
  Profile FW (on each SUT)                    Analysis FW — Module 1 (this repo)
  ────────────────────────                    ──────────────────────────────────
@@ -35,27 +37,86 @@ The result is a single static binary.
                                              one table per <layer>_<type>
 ```
 
-Pipeline stages (each a package under `internal/`):
+### Code flow — one run, end to end
 
 ```
-discover   walk the run dir; pair each <stem>.proto with its <stem>.pb part(s)
-registry   compile the .proto at runtime → derive table(s) + neutral columns
-reader     parse each .pb (one wrapper message) and iterate its records
-worker     flatten a record → row(s): scalars → main table, repeated → child tables
-store      create tables if absent; batched INSERT   (ClickHouse; memory for tests)
+  cmd/analysis-fw ──── flags, config, single-vs-batch dispatch, exit code
+        │
+        ▼
+  internal/runner ──── orchestration
+        │
+        ├─1─► discover.Discover(runDir)
+        │        walks the tree, groups .pb by stem, pairs each with its .proto,
+        │        orders split parts, and REJECTS: data with no schema, a
+        │        non-contiguous 000..N-1 run, an unparseable .pb name
+        │              └──► []Unit{ Stem, ProtoPath, PBParts }
+        │
+        ├─2─► registry.Build(stem, protoPath)          ── once per unit
+        │        parses .proto in pure Go (protocompile — no protoc binary),
+        │        detects record/header/payload/wrapper BY STRUCTURE, then
+        │        derives the table shape in NEUTRAL types
+        │              └──► TableSchema{ Columns []store.Column, Children, ... }
+        │
+        └─3─► bounded goroutine pool (store.workers)   ── units run concurrently
+                 │                                        schema compiled once,
+                 │                                        one pooled connection
+                 ▼
+              worker.LoadUnit(unit, schema, store)
+                 │
+                 ├─► store.EnsureTable(main)  +  EnsureTable(each child)
+                 │
+                 ├─► for each .pb part:
+                 │      reader.Records(part, schema)
+                 │         one wrapper message → repeated list of records
+                 │         (protobuf's repeated encoding delimits them —
+                 │          there is NO length-prefix framing)
+                 │
+                 └─► for each record:
+                        ts   = worker.TSForDB(header.timestamp, store range)
+                        row  = run_id | ts | [record_id] | header… | payload… | _loaded_at
+                        child rows (one per repeated sub-message element)
+                        → batch of store.batch_size → store.Insert(...)
+                 │
+                 └──► UnitResult{ Records, TableRows }   ← reconciled: main rows == records
+        │
+        ▼
+  JSON report on stdout · logs on stderr · exit code by failure class
 ```
+
+### The database seam
+
+Everything database-specific lives **below** one interface, so swapping the
+database is a new adapter and nothing else ([ADR-0008](docs/decisions/0008-database-seam.md)):
+
+```
+  discover · registry · reader · worker · runner
+        speak only neutral types (store.ColumnType: STRING, UINT64, DATETIME …)
+  ═══════════════════ store.Store interface ═══════════════════
+        TimestampRange() · Connect() · EnsureTable() · Insert() · Close()
+  ─────────────────────────────────────────────────────────────
+   store/clickhouse/          store/memory/         store/factory/
+     neutral → CH types         used by tests         the ONE place an
+     MergeTree DDL              no storage limit      adapter is named
+     range 1970–2106
+```
+
+Adding a database = one package under `internal/store/` + one case in
+`internal/store/factory`. Nothing above the line changes.
+
+### Package map
 
 | Path | Responsibility |
 |---|---|
 | `cmd/analysis-fw/` | entry point; single-vs-batch dispatch; exit codes; JSON report |
 | `cmd/mkfixture/` | generate simulated profiling data |
 | `internal/config/` | load/validate `config/config.yaml`; `CH_HOST`/`CH_PORT` env + `-config` overrides |
-| `internal/discover/` | walk run dir, group `.proto`/`.pb` by stem, order split parts |
+| `internal/discover/` | walk run dir, pair `.pb` with `.proto`, order + validate split parts |
 | `internal/registry/` | compile `.proto` in pure Go → table schema (main + child tables) |
 | `internal/reader/` | parse a `.pb` wrapper, yield records |
 | `internal/worker/` | flatten records → rows; timestamp parsing |
 | `internal/runner/` | run one directory (units in parallel) and batches of runs |
-| `internal/store/` | the database seam: `store.go` (interface), `factory/` (the one place an adapter is named), `clickhouse/`, `memory/` (tests) |
+| `internal/store/` | the database seam: `store.go` (interface + neutral types), `factory/`, `clickhouse/`, `memory/` |
+| `internal/fwerr/` | error classes → exit codes |
 | `internal/fixture/` | simulated-data generator, shared by `mkfixture` and the tests |
 | `config/`, `docs/`, `testdata/` | editable config; docs; bundled `.proto` files |
 
@@ -75,6 +136,35 @@ GOOS=linux GOARCH=amd64 go build -o bin/analysis-fw ./cmd/analysis-fw
 
 Then copy `bin/analysis-fw` and `config/config.yaml` over — that's the whole
 deployment.
+
+## First run on a new machine
+
+```bash
+# 1. build
+go build -o bin/ ./cmd/...
+
+# 2. sanity-check without a database (uses the in-memory adapter)
+go test ./...
+
+# 3. check ClickHouse is reachable on the NATIVE port
+docker ps                                  # the container must publish 9000
+clickhouse-client --query "SELECT 1"       # or: nc -z localhost 9000
+
+# 4. load a real run
+./bin/analysis-fw /data/incoming/ProfileData-<tag>-<timestamp>
+```
+
+> ⚠️ **Port 9000, not 8123.** This loader speaks ClickHouse's **native**
+> protocol; the HTTP port (8123) will not work. The standard ClickHouse image
+> serves both, but the container must publish 9000 — if it was started with only
+> `-p 8123:8123`, recreate it with `-p 9000:9000 -p 8123:8123`. (Grafana and
+> `clickhouse-client --port 8123` keep using HTTP; only this loader changed.)
+>
+> Override without editing the config: `CH_HOST=... CH_PORT=... ./bin/analysis-fw <dir>`
+
+**Config lookup:** `config/config.yaml` is resolved relative to the working
+directory first, then next to the binary. Run from the repo root, keep a
+`config/` directory beside the binary, or pass `-config /path/to/config.yaml`.
 
 ## Usage
 
@@ -199,7 +289,7 @@ ready ClickHouse and Grafana queries — is in
 ## Test
 
 ```bash
-go test ./...           # 28 tests, no database needed
+go test ./...           # 33 tests, no database needed
 go test ./... -v        # per-test detail
 go vet ./...
 ```
@@ -207,6 +297,17 @@ go vet ./...
 Tests run the whole pipeline against an in-memory store — no database required.
 The fixture is generated from `testdata/protos/` at test time, so it can never
 drift from what the loader expects.
+
+**Run the whole CLI without a database** — the memory adapter makes a full
+end-to-end smoke test possible anywhere:
+
+```bash
+mkdir -p /tmp/memcfg/config
+sed 's/kind: clickhouse/kind: memory/' config/config.yaml > /tmp/memcfg/config/config.yaml
+./bin/mkfixture -protos testdata/protos /tmp/fix
+./bin/analysis-fw -config /tmp/memcfg/config/config.yaml \
+    /tmp/fix/ProfileData-fixture-20260727-180221     # expect exit 0 + JSON report
+```
 
 Benchmarks (decode + row-building throughput, no database in the measurement):
 

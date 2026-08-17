@@ -63,7 +63,7 @@ where it and an ADR disagree, the ADR wins.
 
 ## Status (keep this current)
 
-- **Now:** Module 1 offline loader — **Go, 28 tests pass**, in good shape. The
+- **Now:** Module 1 offline loader — **Go, 33 tests pass**, in good shape. The
   Python implementation was replaced ([ADR-0009](docs/decisions/0009-go-implementation.md)).
 - **Next:** POC 2 — live streaming ingestion at fleet scale (see [docs/roadmap.md](docs/roadmap.md)).
 - **Deferred debt** (all tracked in ADRs): append-only reload, single-node

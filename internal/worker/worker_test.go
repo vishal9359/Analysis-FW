@@ -26,6 +26,11 @@ func TestParseTSFormats(t *testing.T) {
 	if got.Month() != time.July || got.Day() != 27 || got.Second() != 46 {
 		t.Errorf("full names/no year: got %v", got)
 	}
+	// a no-year format gets the current year injected, so ts lands in the right
+	// partition instead of year 0
+	if got.Year() != time.Now().Year() {
+		t.Errorf("no-year format: year = %d, want current year %d", got.Year(), time.Now().Year())
+	}
 	if _, ok := worker.ParseTS(""); ok {
 		t.Error("empty string should not parse")
 	}

@@ -13,7 +13,7 @@ after the port rather than assumed.
 Port Module 1 to Go, mirroring the existing design exactly: same pipeline
 (`discover → registry → reader → worker → store`), same database seam
 ([ADR-0008](0008-database-seam.md)), same input contract, same exit codes, same
-JSON report, same 26 tests (plus 2 Go-specific ones).
+JSON report, same 26 tests, plus 7 Go-specific ones (33 total).
 
 Dependencies, pinned for Go 1.18 compatibility:
 
@@ -75,10 +75,41 @@ runtime-schema property that is the point of the design
   (ClickHouse ingest is).
 - The deployment win is real and permanent.
 
+**Why Go is slower here is a design tradeoff, not a defect.** Python's protobuf
+runtime is `upb`, a C library Google wrote for exactly this dynamic case, with
+arena allocation. Go's protobuf deliberately avoids cgo — which is *why* this
+port produces a single static binary that cross-compiles with no `protoc`. The
+same decision buys the deployment win and costs the decode speed.
+
 **Revisit if** per-IO event tracing lands (~1M events/s → ~1.4B records per run),
-where the 1.7× would cost real hours. The fix then is a generated-struct fast
-path for known layers, keeping `dynamicpb` as the generic fallback — not a
-language change.
+where the 1.7× would cost real hours. Three mitigations, in preference order:
+
+1. **Direct wire-format decoder** — the loader never needs a message object; it
+   builds a ~5 KB `dynamicpb` message per record only to read ~18 fields out of
+   it. Since the descriptor is known at runtime, the wire bytes can be walked
+   straight into the row slice, skipping message construction entirely. Keeps
+   runtime schemas; likely several-fold faster. ~300 lines.
+2. **Hybrid** — generated structs as a fast path for stable layers, `dynamicpb`
+   as the fallback for new ones. Adds a build step for the fast-path protos only.
+3. **Generated structs everywhere** — fastest, but requires a build step per
+   producer `.proto` and forfeits the runtime-schema property
+   ([ADR-0002](0002-runtime-schema-from-proto.md)). Not recommended.
+
+None is a language change.
+
+### Parity verified, not assumed
+
+The port was checked against the Python source function by function. One real
+gap was found and fixed before merge: `discover` had lost three integrity
+guards — it must reject **data with no schema beside it**, a **non-contiguous
+`000..N-1` split run** (a missing part would otherwise load silently and short),
+and an **unparseable `.pb` name**. All three are restored and now covered by
+tests (`internal/discover/discover_test.go`), which is why the suite grew from
+26 to 33.
+
+The CLI surface matches exactly: same flags (Go's `flag` accepts both `-batch`
+and `--batch`, so existing muscle memory works), same exit codes, same JSON
+report shape.
 
 ### Operational change — the ClickHouse port
 

@@ -79,15 +79,30 @@ func (s *Store) settings() ch.Settings {
 }
 
 func (s *Store) open(database string) (driver.Conn, error) {
-	opts := &ch.Options{
+	// The target runs the default user with no password (see the config docs),
+	// so Username is set explicitly rather than left to the driver's default.
+	// Bootstrapping (database == "") connects to ClickHouse's own `default`
+	// database, because CREATE DATABASE cannot run from inside the database it
+	// is creating.
+	if database == "" {
+		database = "default"
+	}
+	return ch.Open(&ch.Options{
 		Addr:     []string{fmt.Sprintf("%s:%d", s.Host, s.Port)},
+		Auth:     ch.Auth{Database: database, Username: "default"},
 		Settings: s.settings(),
-	}
-	if database != "" {
-		opts.Auth = ch.Auth{Database: database}
-	}
-	return ch.Open(opts)
+		// Units load concurrently, so allow more than the driver's small
+		// default; each worker sends its own batch.
+		MaxOpenConns:    maxConns,
+		MaxIdleConns:    maxConns / 2,
+		DialTimeout:     10 * time.Second,
+		ConnMaxLifetime: time.Hour,
+	})
 }
+
+// maxConns bounds the driver's pool. Comfortably above the usual store.workers
+// so concurrent batches never queue on a connection.
+const maxConns = 16
 
 // Connect opens the connection, creating the target database if absent.
 func (s *Store) Connect(ctx context.Context) error {
