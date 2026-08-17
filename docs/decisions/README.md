@@ -14,6 +14,7 @@ history. This is how "why is it like this?" stays answerable as the project grow
 | [0005](0005-uint64-ids-stopgap.md) | `UInt64` sequence `run_id`/`record_id` as an MVP stopgap | Accepted — revisit for multi-node |
 | [0006](0006-mvp-append-only-ingest.md) | MVP ingest is append-only | Accepted — revisit with the coordinator |
 | [0007](0007-streaming-transport-ladder.md) | Streaming transport ladder (Vector → gRPC gateway → Kafka) | Accepted direction — build in POC 2 |
+| [0008](0008-database-seam.md) | Database seam: neutral schema types, adapter owns the SQL dialect | Accepted |
 
 ## Adding an ADR
 

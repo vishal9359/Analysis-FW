@@ -5,12 +5,12 @@ operator can edit it without touching the code. Its path is resolved relative
 to the source tree (repo root), so it is found regardless of the current
 working directory; ``--config`` (CLI) overrides it. Host/port may also be
 overridden by environment (``CH_HOST``/``CH_PORT``). No credentials live in
-code or config (the target ClickHouse uses the default user with no password).
+code or config (the target database uses the default user with no password).
 """
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -28,7 +28,8 @@ class StoreConfig:
     database: str
     batch_size: int
     workers: int
-    async_insert: bool
+    kind: str = "clickhouse"          # which adapter (see store/factory.py)
+    options: dict = field(default_factory=dict)   # adapter-specific settings
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,10 @@ def load_config(path: Path | None = None) -> Config:
     if batch_size < 1:
         raise ConfigError("config: store.batch_size must be >= 1")
 
+    options = store.get("options") or {}
+    if not isinstance(options, dict):
+        raise ConfigError("config: 'store.options' must be a mapping")
+
     return Config(
         producer_name=str(_require(producer, "name", "producer")),
         store=StoreConfig(
@@ -81,7 +86,8 @@ def load_config(path: Path | None = None) -> Config:
             database=str(_require(producer, "database", "producer")),
             batch_size=batch_size,
             workers=workers,
-            async_insert=bool(store.get("async_insert", False)),
+            kind=str(store.get("kind", "clickhouse")),
+            options=dict(options),
         ),
         log_level=str(logging.get("level", "INFO")).upper(),
         log_format=str(logging.get("format", "json")).lower(),

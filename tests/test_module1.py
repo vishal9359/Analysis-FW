@@ -21,9 +21,11 @@ import shutil
 
 from src.config import Config, StoreConfig
 from src.discover import discover
-from src.errors import ExitCode, InputError, SchemaError
-from src.registry import build_schema, build_schema_from_descriptor, create_table_ddl
+from src.errors import ConfigError, ExitCode, InputError, SchemaError
+from src.registry import build_schema, build_schema_from_descriptor
 from src.runner import find_runs, run_batch, run_load
+from src.store.clickhouse import TIMESTAMP_RANGE as CH_TS_RANGE, create_table_ddl
+from src.store.factory import make_store
 from src.store.memory import MemoryStore
 from src.worker import load_unit, parse_ts
 
@@ -35,7 +37,7 @@ BLOCK1 = "linux_block_1_stats"
 
 def _cfg(workers=1, batch=250):
     return Config("profile_fw",
-                  StoreConfig("localhost", 8123, "profile_fw", batch, workers, False),
+                  StoreConfig("localhost", 8123, "profile_fw", batch, workers),
                   "INFO", "text")
 
 
@@ -104,6 +106,36 @@ def test_flat_columns_and_ddl():
     assert "ORDER BY (run_id, hostname, ts)" in ddl
 
 
+# ---- the store seam --------------------------------------------------------
+
+def test_schema_is_database_neutral():
+    """The seam guarantee: nothing above the store names a database type.
+    A derived schema carries only neutral ColumnTypes — never 'UInt64',
+    'MergeTree', or any other ClickHouse spelling."""
+    from src.registry import ColumnType
+    for stem in (BLOCK1, NVME):
+        s = _schema(stem)
+        every_column = list(s.columns) + [c for ch in s.children for c in ch.columns]
+        for col in every_column:
+            assert isinstance(col.type, ColumnType), f"{col.name} is not neutral"
+
+
+def test_adapter_owns_the_sql_dialect():
+    """The same neutral schema renders to a database-specific DDL only inside
+    the adapter — so a second adapter is a new mapping, not a schema change."""
+    s = _schema(BLOCK1)
+    ddl = create_table_ddl("db", s.stem, s.columns, s.order_by)
+    assert "UInt64" in ddl and "MergeTree" in ddl   # ClickHouse spellings, in CH only
+
+
+def test_factory_builds_adapters_and_rejects_unknown():
+    assert isinstance(make_store("memory", "h", 1, "db"), MemoryStore)
+    ch = make_store("clickhouse", "h", 8123, "db", {"async_insert": True})
+    assert ch.async_insert is True and ch.database == "db"
+    with pytest.raises(ConfigError, match="unknown store.kind"):
+        make_store("oracle", "h", 1, "db")
+
+
 # ---- registry: repeated child tables (NVMe) ----------------------------
 
 def test_nvme_children_detected():
@@ -154,13 +186,25 @@ def test_malformed_z_offset_treated_as_utc():
 
 
 def test_ts_for_db_never_out_of_range():
+    """Clamped to the target store's range — here ClickHouse's unsigned 32-bit
+    epoch — so a bad producer timestamp can never fail the insert."""
     import struct
     from src.worker import ts_for_db
     for s in ["Monday July 27 18:01:46:233", "Mon Jul 27 18:02:21 2026",
               "", "garbage", "Sat Jun 27 14:40:48 1969"]:
-        epoch = int(ts_for_db(s).timestamp())
+        epoch = int(ts_for_db(s, CH_TS_RANGE).timestamp())
         assert 0 <= epoch <= 4294967295
         struct.pack("I", epoch)
+
+
+def test_ts_clamp_follows_the_store_not_the_loader():
+    """The clamp is the adapter's limit, not a hardcoded one: a store with a
+    wider range keeps a pre-1970 timestamp instead of flooring it to the epoch."""
+    from src.store.base import WIDEST_TIMESTAMP_RANGE
+    from src.worker import ts_for_db
+    old = "1969-06-27T14:40:48"
+    assert ts_for_db(old, CH_TS_RANGE).year == 1970            # ClickHouse floors it
+    assert ts_for_db(old, WIDEST_TIMESTAMP_RANGE).year == 1969  # a wider store keeps it
 
 
 # ---- end to end ---------------------------------------------------------

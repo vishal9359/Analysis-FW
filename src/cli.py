@@ -42,7 +42,7 @@ def _setup_logging(level: str, fmt: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m src",
-        description="Load a ProfileData-* directory into ClickHouse.")
+        description="Load a ProfileData-* directory into the configured database.")
     parser.add_argument("input_dir", type=Path,
                         help="a ProfileData-* run directory, or a parent of several")
     parser.add_argument("--batch", action="store_true",

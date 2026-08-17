@@ -20,8 +20,8 @@ from .config import Config
 from .discover import Unit, discover
 from .errors import AnalysisFWError, DatabaseError, ExitCode, InputError
 from .registry import build_schema, build_schema_from_descriptor
-from .store.clickhouse import ClickHouseStore
 from .store.base import Store
+from .store.factory import make_store
 from .worker import UnitResult, load_unit
 
 
@@ -68,11 +68,12 @@ class _Job:
     descriptor_bytes: bytes
     source: str            # proto filename, so the child finds the primary file
     run_id: str
+    kind: str
     host: str
     port: int
     database: str
     batch_size: int
-    async_insert: bool
+    options: dict
 
 
 def _run_job(job: _Job) -> UnitResult:
@@ -81,7 +82,7 @@ def _run_job(job: _Job) -> UnitResult:
     cannot be pickled."""
     schema = build_schema_from_descriptor(
         job.stem, job.descriptor_bytes, source=job.source)
-    store = ClickHouseStore(job.host, job.port, job.database, job.async_insert)
+    store = make_store(job.kind, job.host, job.port, job.database, job.options)
     store.connect()
     try:
         return load_unit([Path(p) for p in job.pb_parts], schema, store,
@@ -96,7 +97,8 @@ def _run_job(job: _Job) -> UnitResult:
 
 def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadReport:
     """Discover and load a run. If `store` is given, run sequentially against it
-    (used by tests). Otherwise use ClickHouse with the configured worker pool."""
+    (used by tests). Otherwise build the configured store and use the worker
+    pool."""
     run_id = input_dir.resolve().name
     units = discover(input_dir)
     schemas = {u.stem: build_schema(u.stem, u.proto_path) for u in units}
@@ -107,8 +109,8 @@ def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadRe
     # sequential path (injected store, or workers == 1)
     if store is not None or cfg.store.workers == 1:
         own = store is None
-        st = store or ClickHouseStore(cfg.store.host, cfg.store.port,
-                                      cfg.store.database, cfg.store.async_insert)
+        st = store or make_store(cfg.store.kind, cfg.store.host, cfg.store.port,
+                                 cfg.store.database, cfg.store.options)
         if own:
             st.connect()
         try:
@@ -126,9 +128,9 @@ def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadRe
         _Job(stem=u.stem, pb_parts=[str(p) for p in u.pb_parts],
              descriptor_bytes=schemas[u.stem].descriptor_bytes,
              source=u.proto_path.name,
-             run_id=run_id, host=cfg.store.host, port=cfg.store.port,
-             database=cfg.store.database, batch_size=cfg.store.batch_size,
-             async_insert=cfg.store.async_insert)
+             run_id=run_id, kind=cfg.store.kind, host=cfg.store.host,
+             port=cfg.store.port, database=cfg.store.database,
+             batch_size=cfg.store.batch_size, options=cfg.store.options)
         for u in units
     ]
     workers = min(cfg.store.workers, len(jobs))

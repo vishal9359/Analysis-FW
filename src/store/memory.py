@@ -3,9 +3,11 @@ tests without a database. Not for production use.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Sequence
 
 from ..registry import Column
+from .base import WIDEST_TIMESTAMP_RANGE
 
 
 class MemoryStore:
@@ -14,6 +16,10 @@ class MemoryStore:
         self.columns: dict[str, list[Column]] = {}   # table -> columns
         self.order_by: dict[str, list[str]] = {}
         self.connected = False
+
+    @property
+    def timestamp_range(self) -> tuple[datetime, datetime]:
+        return WIDEST_TIMESTAMP_RANGE      # no storage limit
 
     def connect(self) -> None:
         self.connected = True

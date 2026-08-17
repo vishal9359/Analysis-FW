@@ -52,7 +52,7 @@ store      create tables if absent; batched INSERT   (ClickHouse; in-memory for 
 | `src/reader.py` | parse a `.pb` wrapper, yield records |
 | `src/worker.py` | flatten records → rows; timestamp parsing |
 | `src/runner.py` | run one directory (units in parallel) and batches of runs |
-| `src/store/` | ClickHouse adapter + in-memory adapter (tests) |
+| `src/store/` | the database seam: `base.py` (interface), `factory.py` (the one place an adapter is named), `clickhouse.py`, `memory.py` (tests) |
 | `config/`, `docs/`, `tests/` | editable config; docs (design, block-metrics, timestamp); test suite + fixtures |
 
 ## Install

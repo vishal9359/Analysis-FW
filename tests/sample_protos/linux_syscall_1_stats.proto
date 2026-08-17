@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package iopattern;
+
+option go_package = "linux_tracer/proto;main";
+
+enum IoType {
+    UNSPECIFIED = 0;
+
+    READ = 1;
+    READV = 2;
+    PREAD = 3;
+    PREADV = 4;
+    WRITE = 5;
+    WRITEV = 6;
+    PWRITE = 7;
+    PWRITEV = 8;
+
+    AIO_READ = 9;
+    AIO_PREADV = 10;
+    AIO_PWRITE = 11;
+    AIO_PWRITEV = 12;
+
+    IOURING_READ = 13;
+    IOURING_READV = 14;
+    IOURING_READ_FIXED = 15;
+    IOURING_WRITE = 16;
+    IOURING_WRITEV = 17;
+    IOURING_WRITE_FIXED = 18;
+}
+
+message GenericFormat {
+    optional string timestamp = 1;
+    optional string hostname = 2;
+    optional uint32 component = 3;
+    optional string tag = 4;
+    optional uint32 log_level = 5;
+}
+
+message Payload {
+    // mmap / mremap syscall invocation counts. These are cumulative since
+    // tracer start (not interval deltas) because they are simple counters,
+    // not IO operations with latency or size metrics.
+    optional uint64 mmap_count = 1;
+    optional uint64 mremap_count = 2;
+
+    repeated SyscallsIOPattern io_patterns = 3;
+}
+
+message SyscallsIOPattern {
+    IoType io_type = 1;
+    optional uint64 io_size_bytes = 2;
+    optional uint64 io_count = 3;
+    optional uint64 total_time = 4;
+}
+
+message StatLog {
+    GenericFormat generic_format = 1;
+    Payload payload = 2;
+}
+
+message StatLogs {
+    repeated StatLog stats_log = 1;
+}

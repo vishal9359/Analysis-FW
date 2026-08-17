@@ -10,11 +10,13 @@ producer:
 # (the repeated encoding delimits records internally) — no framing option needed.
 
 store:
+  kind: clickhouse          # which adapter (see src/store/factory.py)
   host: localhost           # overridable by env CH_HOST
   port: 8123                # overridable by env CH_PORT (ClickHouse HTTP)
   batch_size: 100000        # rows per insert
   workers: 4                # process-pool size (how many .pb files load at once)
-  async_insert: false       # must stay false so row counts are truthful
+  options:                  # adapter-specific settings
+    async_insert: false     # ClickHouse: must stay false so row counts are truthful
 
 logging:
   level: INFO               # DEBUG | INFO | WARNING | ERROR

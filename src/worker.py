@@ -41,13 +41,12 @@ _MILLIS = re.compile(r"(\d{2}:\d{2}:\d{2})[:.]\d{1,6}\b")
 # already means UTC, so we drop the trailing offset and keep 'Z'.
 _Z_OFFSET = re.compile(r"Z[+-]?\d{2}:?\d{2}$")
 
-# ClickHouse DateTime is an unsigned 32-bit epoch: 1970-01-01 .. 2106-02-07 UTC.
 # We treat the (tz-less) header string as UTC so the stored ts is deterministic
-# regardless of the loader machine's timezone, and clamp to this range so a bad
-# timestamp can never serialize out of bounds (which crashes the insert).
+# regardless of the loader machine's timezone, then clamp to the range the store
+# can represent (each adapter declares its own) so a bad producer timestamp can
+# never serialize out of bounds and fail the insert.
 _UTC = timezone.utc
-_DT_MIN = datetime(1970, 1, 1, tzinfo=_UTC)
-_DT_MAX = datetime(2106, 2, 7, tzinfo=_UTC)
+_EPOCH = datetime(1970, 1, 1, tzinfo=_UTC)
 
 
 @dataclass
@@ -103,33 +102,38 @@ def parse_ts(s: str) -> datetime | None:
     return None
 
 
-def ts_for_db(s: str) -> datetime:
-    """The `ts` column value: a UTC-aware DateTime, clamped to ClickHouse's
-    representable range so it always serializes to a valid unsigned epoch.
-    Unparseable timestamps become the epoch (1970-01-01), never a crash."""
+def ts_for_db(s: str, ts_range: tuple[datetime, datetime] | None = None) -> datetime:
+    """The `ts` column value: a UTC-aware datetime, clamped to `ts_range` (the
+    target store's representable range) so it always serializes successfully.
+    Unparseable timestamps become the range's lower bound, never a crash.
+
+    `ts_range` defaults to the unix epoch as the floor and no ceiling — callers
+    that write to a store pass `store.timestamp_range`."""
+    lo, hi = ts_range if ts_range is not None else (_EPOCH, None)
     dt = parse_ts(s)
     if dt is None:
-        return _DT_MIN
+        return lo
     # A tz-aware timestamp (ISO with Z/offset) is converted to the real UTC
     # instant; a naive one is interpreted as UTC. Either way ts is deterministic.
     dt = dt.astimezone(_UTC) if dt.tzinfo is not None else dt.replace(tzinfo=_UTC)
-    if dt < _DT_MIN:
-        return _DT_MIN
-    if dt > _DT_MAX:
-        return _DT_MAX
+    if dt < lo:
+        return lo
+    if hi is not None and dt > hi:
+        return hi
     return dt
 
 
 def load_unit(pb_parts: list[Path], schema: TableSchema, store: Store,
               run_id: str, batch_size: int) -> UnitResult:
     """Load one unit into its main table plus a child table per repeated payload
-    sub-message. A `record_id` (UInt64 sequence, per record) links a main row to
+    sub-message. A `record_id` (64-bit sequence, per record) links a main row to
     its child rows."""
     store.ensure_table(schema.stem, schema.columns, schema.order_by)
     for ch in schema.children:
         store.ensure_table(ch.table, ch.columns, ch.order_by)
 
     loaded_at = datetime.now().replace(microsecond=0)
+    ts_range = store.timestamp_range      # the target store's limits, not ours
     generic_field = schema.generic_field
     payload_field = schema.payload_field
     generic_fields = schema.generic_fields
@@ -166,7 +170,7 @@ def load_unit(pb_parts: list[Path], schema: TableSchema, store: Store,
             records += 1
             g = getattr(rec, generic_field)
             p = getattr(rec, payload_field)
-            ts = ts_for_db(g.timestamp)
+            ts = ts_for_db(g.timestamp, ts_range)
             gen_vals = tuple(getattr(g, f) for f in generic_fields)
 
             if has_rid:

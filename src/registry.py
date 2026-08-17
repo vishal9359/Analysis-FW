@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 import grpc_tools
@@ -35,30 +36,52 @@ GENERIC_FIELD = "generic_format"
 PAYLOAD_FIELD = "payload"
 GENERIC_MESSAGE = "GenericFormat"
 
-# protobuf field type -> ClickHouse type
-_PROTO_TO_CH = {
-    FD.TYPE_STRING: "String", FD.TYPE_BYTES: "String", FD.TYPE_BOOL: "Bool",
-    FD.TYPE_INT32: "Int32", FD.TYPE_SINT32: "Int32", FD.TYPE_SFIXED32: "Int32",
-    FD.TYPE_INT64: "Int64", FD.TYPE_SINT64: "Int64", FD.TYPE_SFIXED64: "Int64",
-    FD.TYPE_UINT32: "UInt32", FD.TYPE_FIXED32: "UInt32",
-    FD.TYPE_UINT64: "UInt64", FD.TYPE_FIXED64: "UInt64",
-    FD.TYPE_FLOAT: "Float32", FD.TYPE_DOUBLE: "Float64", FD.TYPE_ENUM: "Int32",
+class ColumnType(str, Enum):
+    """Database-neutral column types.
+
+    The schema layer speaks only these; each store adapter maps them to its own
+    SQL types. Nothing above the store seam names a ClickHouse (or any other
+    database's) type.
+    """
+    STRING = "string"
+    BOOL = "bool"
+    INT32 = "int32"
+    INT64 = "int64"
+    UINT32 = "uint32"
+    UINT64 = "uint64"
+    FLOAT32 = "float32"
+    FLOAT64 = "float64"
+    DATETIME = "datetime"
+
+
+# protobuf field type -> neutral column type
+_PROTO_TO_TYPE = {
+    FD.TYPE_STRING: ColumnType.STRING, FD.TYPE_BYTES: ColumnType.STRING,
+    FD.TYPE_BOOL: ColumnType.BOOL,
+    FD.TYPE_INT32: ColumnType.INT32, FD.TYPE_SINT32: ColumnType.INT32,
+    FD.TYPE_SFIXED32: ColumnType.INT32,
+    FD.TYPE_INT64: ColumnType.INT64, FD.TYPE_SINT64: ColumnType.INT64,
+    FD.TYPE_SFIXED64: ColumnType.INT64,
+    FD.TYPE_UINT32: ColumnType.UINT32, FD.TYPE_FIXED32: ColumnType.UINT32,
+    FD.TYPE_UINT64: ColumnType.UINT64, FD.TYPE_FIXED64: ColumnType.UINT64,
+    FD.TYPE_FLOAT: ColumnType.FLOAT32, FD.TYPE_DOUBLE: ColumnType.FLOAT64,
+    FD.TYPE_ENUM: ColumnType.INT32,
 }
 
 # Loader-added bookkeeping columns (not from the proto).
-LEADING_COLUMNS = [("run_id", "String"), ("ts", "DateTime")]
-TRAILING_COLUMNS = [("_loaded_at", "DateTime")]
+LEADING_COLUMNS = [("run_id", ColumnType.STRING), ("ts", ColumnType.DATETIME)]
+TRAILING_COLUMNS = [("_loaded_at", ColumnType.DATETIME)]
 # Correlation key, added to the main + child tables ONLY when a payload has
-# repeated sub-messages (i.e. child tables exist). A UInt64 sequence assigned
-# per record by the loader; links a main row to its child rows.
+# repeated sub-messages (i.e. child tables exist). A 64-bit unsigned sequence
+# assigned per record by the loader; links a main row to its child rows.
 # (Deferred to re-architecture: a multi-node-safe scheme — Snowflake/UUIDv7.)
-RECORD_ID_COLUMN = ("record_id", "UInt64")
+RECORD_ID_COLUMN = ("record_id", ColumnType.UINT64)
 
 
 @dataclass(frozen=True)
 class Column:
     name: str
-    ch_type: str
+    type: ColumnType
 
 
 @dataclass
@@ -102,12 +125,12 @@ def _scalar_columns(msg_desc, source: str) -> tuple[list[str], list[Column]]:
         if f.type == FD.TYPE_MESSAGE:
             raise SchemaError(f"{source}: {msg_desc.name}.{f.name} is a nested "
                               f"message (this message's fields must be scalars)")
-        ch = _PROTO_TO_CH.get(f.type)
-        if ch is None:
+        ct = _PROTO_TO_TYPE.get(f.type)
+        if ct is None:
             raise SchemaError(f"{source}: {msg_desc.name}.{f.name} has unsupported "
                               f"protobuf type {f.type}")
         names.append(f.name)
-        cols.append(Column(f.name, ch))
+        cols.append(Column(f.name, ct))
     return names, cols
 
 
@@ -128,12 +151,12 @@ def _split_payload(payload_desc, source: str):
             raise SchemaError(
                 f"{source}: payload.{f.name} is a singular nested message; payload "
                 f"fields must be scalars, or repeated messages for child tables")
-        ch = _PROTO_TO_CH.get(f.type)
-        if ch is None:
+        ct = _PROTO_TO_TYPE.get(f.type)
+        if ct is None:
             raise SchemaError(f"{source}: payload.{f.name} has unsupported "
                               f"protobuf type {f.type}")
         scalar_names.append(f.name)
-        scalar_cols.append(Column(f.name, ch))
+        scalar_cols.append(Column(f.name, ct))
     return scalar_names, scalar_cols, repeated
 
 
@@ -273,16 +296,3 @@ def _check_unique(columns: list[Column], source: str) -> None:
             raise SchemaError(f"{source}: duplicate column '{c.name}' "
                               f"(a generic and a payload/sub field share a name)")
         seen.add(c.name)
-
-
-def create_table_ddl(database: str, table: str, columns: list[Column],
-                     order_by: list[str]) -> str:
-    cols = ",\n    ".join(f"`{c.name}` {c.ch_type}" for c in columns)
-    order = ", ".join(order_by)
-    return (
-        f"CREATE TABLE IF NOT EXISTS `{database}`.`{table}`\n"
-        f"(\n    {cols}\n)\n"
-        f"ENGINE = MergeTree\n"
-        f"PARTITION BY run_id\n"
-        f"ORDER BY ({order})"
-    )
