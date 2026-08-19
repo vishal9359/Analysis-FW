@@ -17,9 +17,10 @@ import (
 
 // Stems of the units in the fixture.
 const (
-	Block1 = "linux_block_1_stats"
-	Block2 = "linux_block_2_misc"
-	NVMe   = "linux_nvme_1_stats"
+	Block1  = "linux_block_1_stats"
+	Block2  = "linux_block_2_misc"
+	NVMe    = "linux_nvme_1_stats"
+	Syscall = "linux_syscall_1_stats"
 )
 
 var (

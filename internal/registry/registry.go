@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/bufbuild/protocompile"
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -78,13 +79,35 @@ var (
 	recordIDColumn = store.Column{Name: "record_id", Type: store.TypeUint64}
 )
 
+// maxNestDepth bounds descent into singular sub-messages. Protos are finite,
+// but a self-referential message would otherwise recurse forever.
+const maxNestDepth = 8
+
+// FieldPath locates one scalar value inside a message, descending through
+// singular sub-messages. A length-1 path is a direct field; a longer path walks
+// a 1:1 nested group (e.g. payload.io_flags.direct).
+type FieldPath []protoreflect.FieldDescriptor
+
+// ColumnName is the flattened column name: the field names joined with "_", so
+// a nested group keeps its grouping as a prefix (io_flags_direct).
+func (p FieldPath) ColumnName() string {
+	if len(p) == 1 {
+		return string(p[0].Name())
+	}
+	parts := make([]string, len(p))
+	for i, fd := range p {
+		parts[i] = string(fd.Name())
+	}
+	return strings.Join(parts, "_")
+}
+
 // ChildSchema is a table for one `repeated <Message>` field in the payload
 // (e.g. per_queue). One row per sub-element per record, carrying the header and
 // record_id.
 type ChildSchema struct {
 	Table         string                       // <stem>_<repeated_field>
 	RepeatedField protoreflect.FieldDescriptor // payload field to iterate
-	SubFields     []protoreflect.FieldDescriptor
+	SubFields     []FieldPath
 	Columns       []store.Column
 	OrderBy       []string
 }
@@ -98,9 +121,9 @@ type TableSchema struct {
 	GenericField  protoreflect.FieldDescriptor // the GenericFormat field on the record
 	PayloadField  protoreflect.FieldDescriptor // the payload field on the record
 	TimestampFd   protoreflect.FieldDescriptor // generic_format.timestamp
-	GenericFields []protoreflect.FieldDescriptor
-	PayloadFields []protoreflect.FieldDescriptor // SCALAR payload fields
-	Columns       []store.Column                 // main table columns, in row order
+	GenericFields []FieldPath
+	PayloadFields []FieldPath    // scalar payload values, nested groups flattened
+	Columns       []store.Column // main table columns, in row order
 	OrderBy       []string
 	HasRecordID   bool
 	Children      []ChildSchema
@@ -220,7 +243,7 @@ func buildFrom(stem string, fd protoreflect.FileDescriptor,
 			return nil, err
 		}
 		// convention: the sub-message's first field is its key dimension
-		keyDim := string(subNames[0].Name())
+		keyDim := subCols[0].Name
 		children = append(children, ChildSchema{
 			Table:         fmt.Sprintf("%s_%s", stem, f.Name()),
 			RepeatedField: f,
@@ -328,71 +351,116 @@ func detect(fd protoreflect.FileDescriptor, source string) (
 	return rec, gField, pField, wrap, repField, nil
 }
 
-// scalarColumns maps a message's scalar fields to columns. Rejects repeated and
-// nested fields — used for the header (GenericFormat) and for a repeated
-// sub-message's own fields, both of which must be flat scalars.
+// scalarColumns maps a message's fields to columns. Singular sub-messages are a
+// 1:1 group, so they are flattened into the same row with their name as a
+// prefix (io_flags.direct -> io_flags_direct). Repeated fields are rejected —
+// used for the header (GenericFormat) and for a repeated sub-message's own
+// fields, neither of which may fan out further.
 func scalarColumns(msg protoreflect.MessageDescriptor, source string) (
-	[]protoreflect.FieldDescriptor, []store.Column, error) {
+	[]FieldPath, []store.Column, error) {
+	return collectScalars(msg, nil, 0, source)
+}
 
-	var fds []protoreflect.FieldDescriptor
+// collectScalars walks msg, descending into singular sub-messages, and returns
+// one path + column per scalar found. base is the path walked so far.
+//
+// 1:1 data belongs on the same row, so a singular sub-message becomes prefixed
+// columns rather than a child table; only a repeated message (1:N) earns a
+// table of its own.
+func collectScalars(msg protoreflect.MessageDescriptor, base FieldPath, depth int,
+	source string) ([]FieldPath, []store.Column, error) {
+
+	if depth > maxNestDepth {
+		return nil, nil, fwerr.Schema(
+			"%s: %s is nested more than %d levels deep (possible message cycle)",
+			source, msg.FullName(), maxNestDepth)
+	}
+
+	var paths []FieldPath
 	var cols []store.Column
 	for i := 0; i < msg.Fields().Len(); i++ {
 		f := msg.Fields().Get(i)
-		if f.IsList() || f.IsMap() {
+		path := append(append(FieldPath{}, base...), f)
+
+		if f.IsMap() {
+			return nil, nil, fwerr.Schema("%s: %s.%s is a map, which has no column form",
+				source, msg.Name(), f.Name())
+		}
+		if f.IsList() {
 			return nil, nil, fwerr.Schema(
-				"%s: %s.%s is repeated (this message's fields must be scalars)",
+				"%s: %s.%s is repeated (this message's fields must be scalars, or "+
+					"singular sub-messages that flatten into the row)",
 				source, msg.Name(), f.Name())
 		}
 		if f.Kind() == protoreflect.MessageKind || f.Kind() == protoreflect.GroupKind {
-			return nil, nil, fwerr.Schema(
-				"%s: %s.%s is a nested message (this message's fields must be scalars)",
-				source, msg.Name(), f.Name())
+			// 1:1 group -> flatten into this row, keeping the field name as prefix
+			subPaths, subCols, err := collectScalars(f.Message(), path, depth+1, source)
+			if err != nil {
+				return nil, nil, err
+			}
+			paths = append(paths, subPaths...)
+			cols = append(cols, subCols...)
+			continue
 		}
 		ct, ok := protoToType[f.Kind()]
 		if !ok {
 			return nil, nil, fwerr.Schema("%s: %s.%s has unsupported protobuf type %s",
 				source, msg.Name(), f.Name(), f.Kind())
 		}
-		fds = append(fds, f)
-		cols = append(cols, store.Column{Name: string(f.Name()), Type: ct})
+		paths = append(paths, path)
+		cols = append(cols, store.Column{Name: path.ColumnName(), Type: ct})
 	}
-	return fds, cols, nil
+	return paths, cols, nil
 }
 
-// splitPayload separates a payload into scalar fields (-> main table) and
-// repeated sub-messages (-> child tables).
+// splitPayload separates a payload into values that live on the record's own row
+// and repeated sub-messages that become child tables.
+//
+//	scalar             1:1 -> a column
+//	singular message   1:1 -> flattened into prefixed columns on the same row
+//	repeated message   1:N -> its own child table
 func splitPayload(payload protoreflect.MessageDescriptor, source string) (
-	[]protoreflect.FieldDescriptor, []store.Column, []protoreflect.FieldDescriptor, error) {
+	[]FieldPath, []store.Column, []protoreflect.FieldDescriptor, error) {
 
-	var scalarFds []protoreflect.FieldDescriptor
-	var scalarCols []store.Column
+	var paths []FieldPath
+	var cols []store.Column
 	var repeated []protoreflect.FieldDescriptor
 
 	for i := 0; i < payload.Fields().Len(); i++ {
 		f := payload.Fields().Get(i)
+
 		if f.IsList() {
 			if f.Kind() != protoreflect.MessageKind {
 				return nil, nil, nil, fwerr.Schema(
 					"%s: payload.%s is a repeated scalar; only repeated messages "+
 						"(which become child tables) are supported", source, f.Name())
 			}
-			repeated = append(repeated, f) // -> its own child table
+			repeated = append(repeated, f) // 1:N -> its own child table
 			continue
 		}
-		if f.IsMap() || f.Kind() == protoreflect.MessageKind || f.Kind() == protoreflect.GroupKind {
+		if f.IsMap() {
 			return nil, nil, nil, fwerr.Schema(
-				"%s: payload.%s is a singular nested message; payload fields must be "+
-					"scalars, or repeated messages for child tables", source, f.Name())
+				"%s: payload.%s is a map, which has no column form", source, f.Name())
+		}
+		if f.Kind() == protoreflect.MessageKind || f.Kind() == protoreflect.GroupKind {
+			// 1:1 group (e.g. io_flags) -> flatten onto this row, prefixed
+			subPaths, subCols, err := collectScalars(f.Message(), FieldPath{f}, 1, source)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			paths = append(paths, subPaths...)
+			cols = append(cols, subCols...)
+			continue
 		}
 		ct, ok := protoToType[f.Kind()]
 		if !ok {
 			return nil, nil, nil, fwerr.Schema("%s: payload.%s has unsupported protobuf type %s",
 				source, f.Name(), f.Kind())
 		}
-		scalarFds = append(scalarFds, f)
-		scalarCols = append(scalarCols, store.Column{Name: string(f.Name()), Type: ct})
+		paths = append(paths, FieldPath{f})
+		cols = append(cols, store.Column{Name: string(f.Name()), Type: ct})
 	}
-	return scalarFds, scalarCols, repeated, nil
+	return paths, cols, repeated, nil
 }
 
 func checkUnique(cols []store.Column, source string) error {

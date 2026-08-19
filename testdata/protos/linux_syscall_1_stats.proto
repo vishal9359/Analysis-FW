@@ -45,6 +45,18 @@ message Payload {
     optional uint64 mremap_count = 2;
 
     repeated SyscallsIOPattern io_patterns = 3;
+	IOFlags  io_flags = 4;
+}
+
+message IOFlags {
+	optional uint64 direct   = 1;
+	optional uint64 sync     = 2;
+	optional uint64 dsync    = 3;
+	optional uint64 append   = 4;
+	optional uint64 nowait   = 5;
+	optional uint64 async    = 6;
+	optional uint64 no_cache = 7;
+	optional uint64 hiprio   = 8;
 }
 
 message SyscallsIOPattern {

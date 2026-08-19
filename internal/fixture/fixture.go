@@ -198,18 +198,20 @@ func makeWrapper(schema *registry.TableSchema, count, start int) (proto.Message,
 		setNumber(g, "log_level", 3)
 
 		p := rec.Mutable(schema.PayloadField).Message()
-		for _, fd := range schema.PayloadFields {
-			setScalar(p, fd, gi)
+		for _, path := range schema.PayloadFields {
+			setScalarAt(p, path, gi)
 		}
 		for _, c := range schema.Children {
 			sub := p.Mutable(c.RepeatedField).List()
 			for k := 0; k < subCount(string(c.RepeatedField.Name()), gi); k++ {
 				el := sub.NewElement().Message()
-				for idx, fd := range c.SubFields {
+				for idx, path := range c.SubFields {
 					if idx == 0 {
-						setNumber(el, string(fd.Name()), int64(k)) // key dim
+						// key dimension (queue_id / cpu_id / io_type)
+						m, fd := walkTo(el, path)
+						setNumberFd(m, fd, int64(k))
 					} else {
-						setScalar(el, fd, gi+k)
+						setScalarAt(el, path, gi+k)
 					}
 				}
 				sub.Append(protoreflect.ValueOfMessage(el))
@@ -247,6 +249,22 @@ func subCount(fieldName string, gi int) int {
 	default:
 		return 2 + gi%3
 	}
+}
+
+// walkTo descends a FieldPath, creating intermediate singular sub-messages, and
+// returns the message plus the leaf field to set.
+func walkTo(m protoreflect.Message, path registry.FieldPath) (protoreflect.Message, protoreflect.FieldDescriptor) {
+	for i := 0; i < len(path)-1; i++ {
+		m = m.Mutable(path[i]).Message()
+	}
+	return m, path[len(path)-1]
+}
+
+// setScalarAt fills the scalar a FieldPath points at, creating any 1:1 nested
+// group along the way.
+func setScalarAt(m protoreflect.Message, path registry.FieldPath, gi int) {
+	target, fd := walkTo(m, path)
+	setScalar(target, fd, gi)
 }
 
 func setScalar(m protoreflect.Message, fd protoreflect.FieldDescriptor, gi int) {

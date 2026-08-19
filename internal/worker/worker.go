@@ -200,8 +200,8 @@ func LoadUnit(ctx context.Context, pbParts []string, schema *registry.TableSchem
 			p := rec.Get(schema.PayloadField).Message()
 			ts := TSForDB(g.Get(schema.TimestampFd).String(), tsRange)
 
-			for j, fd := range schema.GenericFields {
-				genVals[j] = goValue(g, fd)
+			for j, path := range schema.GenericFields {
+				genVals[j] = goValueAt(g, path)
 			}
 
 			row := make([]interface{}, 0, len(schema.Columns))
@@ -210,8 +210,8 @@ func LoadUnit(ctx context.Context, pbParts []string, schema *registry.TableSchem
 				row = append(row, recordID)
 			}
 			row = append(row, genVals...)
-			for _, fd := range schema.PayloadFields {
-				row = append(row, goValue(p, fd))
+			for _, path := range schema.PayloadFields {
+				row = append(row, goValueAt(p, path))
 			}
 			row = append(row, loadedAt)
 			mainBatch = append(mainBatch, row)
@@ -223,8 +223,8 @@ func LoadUnit(ctx context.Context, pbParts []string, schema *registry.TableSchem
 					crow := make([]interface{}, 0, len(c.Columns))
 					crow = append(crow, runID, ts, recordID)
 					crow = append(crow, genVals...)
-					for _, fd := range c.SubFields {
-						crow = append(crow, goValue(sub, fd))
+					for _, path := range c.SubFields {
+						crow = append(crow, goValueAt(sub, path))
 					}
 					crow = append(crow, loadedAt)
 					childBatch[c.Table] = append(childBatch[c.Table], crow)
@@ -262,6 +262,18 @@ func columnNames(cols []store.Column) []string {
 		out[i] = c.Name
 	}
 	return out
+}
+
+// goValueAt reads the scalar a FieldPath points at, descending through singular
+// sub-messages (a 1:1 group flattened onto this row). An absent sub-message
+// yields its fields' proto3 defaults rather than nil, matching a missing scalar.
+func goValueAt(m protoreflect.Message, path registry.FieldPath) interface{} {
+	for i := 0; i < len(path)-1; i++ {
+		// Get on an unset message field returns a read-only empty message, so
+		// the remaining reads produce zero values.
+		m = m.Get(path[i]).Message()
+	}
+	return goValue(m, path[len(path)-1])
 }
 
 // goValue converts a protobuf field value to the concrete Go type the store
