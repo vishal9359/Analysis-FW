@@ -90,51 +90,96 @@ class TableSchema:
     schema_version: str
 
 
-def _scalar_columns(msg_desc, source: str) -> tuple[list[str], list[Column]]:
-    """Scalar fields of a message -> columns. Rejects repeated/nested — used for
-    the header (GenericFormat) and for a repeated sub-message's own fields, both
-    of which must be flat scalars."""
-    names, cols = [], []
+# A payload/header value may live inside singular sub-messages. A FieldPath is
+# the chain of field names to reach it; the column name is the chain joined with
+# "_", so a 1:1 group keeps its grouping as a prefix (io_flags_direct).
+FieldPath = tuple  # tuple[str, ...]
+
+# Bounds descent into singular sub-messages. Protos are finite, but a
+# self-referential message would otherwise recurse forever.
+MAX_NEST_DEPTH = 8
+
+
+def _column_name(path: tuple) -> str:
+    return "_".join(path)
+
+
+def _scalar_columns(msg_desc, source: str) -> tuple[list[tuple], list[Column]]:
+    """Fields of a message -> columns. A singular sub-message is 1:1 with the
+    row, so it is flattened in with its name as a prefix; repeated fields are
+    rejected. Used for the header (GenericFormat) and for a repeated
+    sub-message's own fields, neither of which may fan out further."""
+    return _collect_scalars(msg_desc, (), 0, source)
+
+
+def _collect_scalars(msg_desc, base: tuple, depth: int,
+                     source: str) -> tuple[list[tuple], list[Column]]:
+    """Walk msg_desc, descending into singular sub-messages, returning one
+    (path, column) per scalar found.
+
+    1:1 data belongs on the same row, so a singular sub-message becomes prefixed
+    columns rather than a child table; only a repeated message (1:N) earns a
+    table of its own."""
+    if depth > MAX_NEST_DEPTH:
+        raise SchemaError(
+            f"{source}: {msg_desc.full_name} is nested more than "
+            f"{MAX_NEST_DEPTH} levels deep (possible message cycle)")
+
+    paths, cols = [], []
     for f in msg_desc.fields:
+        path = base + (f.name,)
         if f.is_repeated:
-            raise SchemaError(f"{source}: {msg_desc.name}.{f.name} is repeated "
-                              f"(this message's fields must be scalars)")
+            raise SchemaError(
+                f"{source}: {msg_desc.name}.{f.name} is repeated (this message's "
+                f"fields must be scalars, or singular sub-messages that flatten "
+                f"into the row)")
         if f.type == FD.TYPE_MESSAGE:
-            raise SchemaError(f"{source}: {msg_desc.name}.{f.name} is a nested "
-                              f"message (this message's fields must be scalars)")
+            # 1:1 group -> flatten into this row, keeping the field name as prefix
+            sub_paths, sub_cols = _collect_scalars(
+                f.message_type, path, depth + 1, source)
+            paths.extend(sub_paths)
+            cols.extend(sub_cols)
+            continue
         ch = _PROTO_TO_CH.get(f.type)
         if ch is None:
             raise SchemaError(f"{source}: {msg_desc.name}.{f.name} has unsupported "
                               f"protobuf type {f.type}")
-        names.append(f.name)
-        cols.append(Column(f.name, ch))
-    return names, cols
+        paths.append(path)
+        cols.append(Column(_column_name(path), ch))
+    return paths, cols
 
 
 def _split_payload(payload_desc, source: str):
-    """Split a payload into scalar fields (-> main table) and repeated
-    sub-messages (-> child tables). A repeated scalar or a singular nested
-    message is not supported and is rejected with a clear error."""
-    scalar_names, scalar_cols, repeated = [], [], []
+    """Split a payload into values that live on the record's own row and
+    repeated sub-messages that become child tables.
+
+        scalar             1:1 -> a column
+        singular message   1:1 -> flattened into prefixed columns on the same row
+        repeated message   1:N -> its own child table
+    """
+    paths, cols, repeated = [], [], []
     for f in payload_desc.fields:
         if f.is_repeated:
             if f.type != FD.TYPE_MESSAGE:
                 raise SchemaError(
                     f"{source}: payload.{f.name} is a repeated scalar; only "
                     f"repeated messages (which become child tables) are supported")
-            repeated.append(f)          # -> its own child table
+            repeated.append(f)          # 1:N -> its own child table
             continue
         if f.type == FD.TYPE_MESSAGE:
-            raise SchemaError(
-                f"{source}: payload.{f.name} is a singular nested message; payload "
-                f"fields must be scalars, or repeated messages for child tables")
+            # 1:1 group (e.g. io_flags) -> flatten onto this row, prefixed
+            sub_paths, sub_cols = _collect_scalars(
+                f.message_type, (f.name,), 1, source)
+            paths.extend(sub_paths)
+            cols.extend(sub_cols)
+            continue
         ch = _PROTO_TO_CH.get(f.type)
         if ch is None:
             raise SchemaError(f"{source}: payload.{f.name} has unsupported "
                               f"protobuf type {f.type}")
-        scalar_names.append(f.name)
-        scalar_cols.append(Column(f.name, ch))
-    return scalar_names, scalar_cols, repeated
+        paths.append((f.name,))
+        cols.append(Column(f.name, ch))
+    return paths, cols, repeated
 
 
 def _detect(pool, primary_file, source: str):
@@ -248,7 +293,7 @@ def build_schema_from_descriptor(stem: str, descriptor_bytes: bytes,
             raise SchemaError(f"{source}: payload.{f.name} sub-message has no fields")
         child_cols = lead + [rid] + generic_cols + sub_cols + trail
         _check_unique(child_cols, f"{source}:{f.name}")
-        key_dim = sub_names[0]     # convention: first field is the dimension key
+        key_dim = sub_cols[0].name  # convention: first field is the dimension key
         children.append(ChildSchema(
             table=f"{stem}_{f.name}", repeated_field=f.name, sub_fields=sub_names,
             columns=child_cols, order_by=["run_id", "hostname", key_dim, "ts"]))

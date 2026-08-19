@@ -120,6 +120,15 @@ def ts_for_db(s: str) -> datetime:
     return dt
 
 
+def _value_at(msg, path: tuple):
+    """Read the scalar a FieldPath points at, descending through singular
+    sub-messages (a 1:1 group flattened onto this row). An unset sub-message
+    yields its fields' proto3 defaults, matching a missing scalar."""
+    for name in path[:-1]:
+        msg = getattr(msg, name)
+    return getattr(msg, path[-1])
+
+
 def load_unit(pb_parts: list[Path], schema: TableSchema, store: Store,
               run_id: str, batch_size: int) -> UnitResult:
     """Load one unit into its main table plus a child table per repeated payload
@@ -167,20 +176,23 @@ def load_unit(pb_parts: list[Path], schema: TableSchema, store: Store,
             g = getattr(rec, generic_field)
             p = getattr(rec, payload_field)
             ts = ts_for_db(g.timestamp)
-            gen_vals = tuple(getattr(g, f) for f in generic_fields)
+            gen_vals = tuple(_value_at(g, path) for path in generic_fields)
 
             if has_rid:
                 main_batch.append((run_id, ts, record_id, *gen_vals,
-                                   *(getattr(p, f) for f in payload_fields), loaded_at))
+                                   *(_value_at(p, path) for path in payload_fields),
+                                   loaded_at))
             else:
                 main_batch.append((run_id, ts, *gen_vals,
-                                   *(getattr(p, f) for f in payload_fields), loaded_at))
+                                   *(_value_at(p, path) for path in payload_fields),
+                                   loaded_at))
 
             for ch in children:
                 cb = child_batches[ch.table]
                 for sub in getattr(p, ch.repeated_field):
                     cb.append((run_id, ts, record_id, *gen_vals,
-                               *(getattr(sub, f) for f in ch.sub_fields), loaded_at))
+                               *(_value_at(sub, path) for path in ch.sub_fields),
+                               loaded_at))
                 if len(cb) >= batch_size:
                     flush_child(ch)
 

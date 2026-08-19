@@ -89,6 +89,18 @@ def _set_scalar(msg, field, gi: int) -> None:
         setattr(msg, field.name, _counter_value(field, gi))
 
 
+def _fill_nested(msg, gi: int) -> None:
+    """Fill a singular sub-message, recursing through further 1:1 groups."""
+    from google.protobuf.descriptor import FieldDescriptor as FD
+    for f in msg.DESCRIPTOR.fields:
+        if f.is_repeated:
+            continue
+        if f.type == FD.TYPE_MESSAGE:
+            _fill_nested(getattr(msg, f.name), gi)
+        else:
+            _set_scalar(msg, f, gi)
+
+
 def _sub_count(field_name: str, gi: int) -> int:
     """Varying, record-dependent number of sub-elements (per_queue / per_core)."""
     if "queue" in field_name:
@@ -124,7 +136,11 @@ def make_wrapper(schema, count: int, start: int = 0):
                             setattr(sub, sf.name, k)        # key dim: queue_id/cpu_id
                         else:
                             _set_scalar(sub, sf, gi + k)
-            elif not f.is_repeated and f.type != FD.TYPE_MESSAGE:
+            elif not f.is_repeated and f.type == FD.TYPE_MESSAGE:
+                # 1:1 group (e.g. io_flags) — the loader flattens it onto the
+                # row, so fill it too or those columns would always be zero.
+                _fill_nested(getattr(p, f.name), gi)
+            elif not f.is_repeated:
                 _set_scalar(p, f, gi)
     return wrapper
 

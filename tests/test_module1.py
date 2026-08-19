@@ -305,3 +305,84 @@ def test_corrupt_pb_gives_clear_error(tmp_path):
     store = MemoryStore(); store.connect()
     with pytest.raises(InputError, match="does not match|truncated|could not parse"):
         run_load(tmp_path / "ProfileData-bad-1", _cfg(), store=store)
+
+
+# ---- singular sub-messages flatten onto the row ---------------------------
+
+def _proto(body: str) -> Path:
+    """Write a minimal contract-shaped .proto with `body` as its messages."""
+    d = Path(tempfile.mkdtemp())
+    p = d / "x.proto"
+    p.write_text('''syntax="proto3";
+message GenericFormat { optional string timestamp=1; optional string hostname=2;
+  optional uint32 component=3; optional string tag=4; optional uint32 log_level=5; }
+''' + body + '''
+message StatLog { GenericFormat generic_format=1; Payload payload=2; }
+message StatLogs { repeated StatLog stat_logs=1; }''')
+    return p
+
+
+def test_singular_sub_message_flattens_with_prefix():
+    """A singular sub-message is 1:1 with the row, so it flattens into the SAME
+    table with its field name as a prefix — never a child table, which would
+    force a JOIN for data guaranteed to be one row."""
+    p = _proto('''
+message IOFlags { optional uint64 direct=1; optional uint64 sync=2; }
+message Payload { optional uint64 mmap_count=1; IOFlags io_flags=2; }''')
+    s = build_schema("x", p)
+
+    assert s.children == [], "a 1:1 group must not become a child table"
+    assert s.has_record_id is False, "no children means no record_id is needed"
+
+    names = [c.name for c in s.columns]
+    for want in ("mmap_count", "io_flags_direct", "io_flags_sync"):
+        assert want in names, f"missing column {want}: {names}"
+    for bare in ("direct", "sync"):
+        assert bare not in names, f"column {bare} should be prefixed: {names}"
+
+
+def test_repeated_still_becomes_child_table():
+    """A repeated sub-message is 1:N and still earns its own child table —
+    the two shapes must not be confused."""
+    p = _proto('''
+message Item { optional uint64 id=1; optional uint64 n=2; }
+message Payload { optional uint64 a=1; repeated Item items=2; }''')
+    s = build_schema("x", p)
+    assert [c.table for c in s.children] == ["x_items"]
+    assert s.has_record_id is True
+
+
+def test_nested_groups_flatten_recursively():
+    p = _proto('''
+message Inner { optional uint64 leaf=1; }
+message Outer { Inner inner=1; }
+message Payload { Outer outer=1; }''')
+    s = build_schema("x", p)
+    assert "outer_inner_leaf" in [c.name for c in s.columns]
+
+
+def test_nested_values_land_in_the_row():
+    """End to end: a nested group's values reach the flattened columns."""
+    p = _proto('''
+message IOFlags { optional uint64 direct=1; optional uint64 sync=2; }
+message Payload { optional uint64 mmap_count=1; IOFlags io_flags=2; }''')
+    schema = build_schema("x", p)
+
+    rec = schema.wrapper_cls()
+    one = getattr(rec, schema.repeated_field).add()
+    one.generic_format.timestamp = "2026-07-27T18:02:21.000Z"
+    one.generic_format.hostname = "spark-e97e"
+    one.payload.mmap_count = 7
+    one.payload.io_flags.direct = 42
+    one.payload.io_flags.sync = 9
+
+    d = p.parent
+    (d / "x.pb").write_bytes(rec.SerializeToString())
+
+    store = MemoryStore(); store.connect()
+    load_unit([d / "x.pb"], schema, store, "run-1", 100)
+    row = dict(zip([c.name for c in store.columns["x"]], store.tables["x"][0]))
+
+    assert row["mmap_count"] == 7
+    assert row["io_flags_direct"] == 42
+    assert row["io_flags_sync"] == 9
