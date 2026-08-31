@@ -14,9 +14,12 @@ history. This is how "why is it like this?" stays answerable as the project grow
 | [0005](0005-uint64-ids-stopgap.md) | `UInt64` sequence `run_id`/`record_id` as an MVP stopgap | Accepted — revisit for multi-node |
 | [0006](0006-mvp-append-only-ingest.md) | MVP ingest is append-only | Accepted — revisit with the coordinator |
 | [0007](0007-streaming-transport-ladder.md) | Streaming transport ladder (Vector → gRPC gateway → Kafka) | Accepted direction — build in POC 2 |
+| [0010](0010-payload-field-shapes-to-tables.md) | Payload field shapes map to tables by structure (1:1 flatten · 1:N child · 1:N:M leaf) | Accepted |
 
 ## Adding an ADR
 
 Copy the shape of an existing one: **Status · Context · Decision · Consequences · References**.
-Number it next in sequence, add a row above, keep it short. If it changes an existing
+Number it next in sequence, add a row above, keep it short. **Check the other branches
+first** — `query` and `go_version` hold `0008`/`0009`, so a new ADR on `main` starts at
+`0010`; a number must mean one decision across every branch. If it changes an existing
 decision, set that one's status to `Superseded by NNNN`.

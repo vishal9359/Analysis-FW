@@ -72,10 +72,18 @@ block / blk-mq → NVMe driver → IRQ completion**.
 - **StatLogs** — the wrapper message; one per `.pb` file; holds `repeated StatLog`.
 - **StatLog** — one record: a `generic_format` (header) + a `payload` (layer data).
 - **GenericFormat** — the header: timestamp, hostname, component, tag, log_level.
-- **Payload** — layer-specific fields (scalars → main table; `repeated <Message>` →
-  child tables).
+- **Payload** — layer-specific fields. Mapped by shape: scalars and singular
+  sub-messages → main table; `repeated <Message>` → child tables.
+- **1:1 group** — a singular sub-message (e.g. syscall `io_flags`), exactly one per
+  record; **flattened** onto the main row as `<field>_<leaf>` columns (`io_flags_direct`).
 - **child table** — `<stem>_<field>` for a repeated sub-message (e.g. NVMe `per_queue`,
   `per_core`); additive rows (1 main + N + M), linked by `record_id`.
+- **leaf table** — for a repeated message nested inside another (`per_core_seq_random[]
+  .entries[]`): one table of the innermost elements, named for the whole path
+  (`<stem>_per_core_seq_random_entries`), with each outer level's scalars (`cpu_id`,
+  `dir`) **denormalized** onto every row. The intermediate level gets no table of its
+  own — one measurement is one row, no JOIN. See
+  [decisions/0010-payload-field-shapes-to-tables.md](decisions/0010-payload-field-shapes-to-tables.md).
 - Detection is **by structure/field-name, not message name**.
 
 ## Database / analysis (ClickHouse)

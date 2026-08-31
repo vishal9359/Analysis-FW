@@ -1,0 +1,44 @@
+syntax = "proto3";
+package nvme_seqrand;
+option go_package = "linux_tracer/proto;main";
+
+enum IoDirection {
+    IO_DIRECTION_UNSPECIFIED = 0;
+    READ  = 1;
+    WRITE = 2;
+}
+
+message GenericFormat {
+    optional string timestamp = 1;
+    optional string hostname = 2;
+    optional uint32 component = 3;
+    optional string tag = 4;
+    optional uint32 log_level = 5;
+}
+
+message NvmeSeqRandomEntry {
+    optional uint64      start_time           = 1;
+    optional uint64      end_time             = 2;
+    optional uint64      accumulated_io_size  = 3;
+    optional uint64      accumulated_io_count = 4;
+    optional bool        is_sequential        = 5;
+}
+
+message NvmeCoreSeqRandom {
+    optional uint32      cpu_id               = 1;
+    optional IoDirection dir                  = 2;
+    repeated NvmeSeqRandomEntry entries       = 3;
+}
+
+message Payload {
+    repeated NvmeCoreSeqRandom per_core_seq_random = 1;
+}
+
+message StatLog {
+    GenericFormat generic_format = 1;
+    Payload payload                = 2;
+}
+
+message StatLogs {
+    repeated StatLog stats_log = 1;
+}

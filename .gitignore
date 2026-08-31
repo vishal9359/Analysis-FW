@@ -1,0 +1,15 @@
+# Python bytecode — build artifacts, never tracked
+__pycache__/
+*.py[cod]
+
+# pytest / tooling
+.pytest_cache/
+.coverage
+htmlcov/
+
+# generated test fixture (rebuild with: python tests/make_fixture.py <dir>)
+tests/_fixture/
+
+# local venvs
+.venv/
+venv/

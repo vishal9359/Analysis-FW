@@ -30,6 +30,7 @@ from src.worker import load_unit, parse_ts
 FIXTURE = HERE / "_fixture" / "ProfileData-fixture-20260727-180221"
 
 NVME = "linux_nvme_1_stats"
+NVME2 = "linux_nvme_2_lbarandomness"
 BLOCK1 = "linux_block_1_stats"
 
 
@@ -58,7 +59,7 @@ def _schema(stem):
 
 def test_discover_finds_units_and_splits():
     u = _units()
-    assert set(u) == {BLOCK1, "linux_block_2_misc", NVME}
+    assert set(u) == {BLOCK1, "linux_block_2_misc", NVME, NVME2}
     assert len(u[BLOCK1].pb_parts) == 2       # split wrapper files
 
 
@@ -169,7 +170,7 @@ def test_full_load_counts():
     store = MemoryStore(); store.connect()
     report = run_load(FIXTURE, _cfg(), store=store)
     assert report.status == "complete"
-    assert report.records == 1700                        # 1000 + 400 + 300
+    assert report.records == 1900                  # 1000 + 400 + 300 + 200
     assert store.count(BLOCK1) == 1000                   # both split files
     assert store.count("linux_block_2_misc") == 400
     assert store.count(NVME) == 300                      # main = 1 per record
@@ -386,3 +387,80 @@ message Payload { optional uint64 mmap_count=1; IOFlags io_flags=2; }''')
     assert row["mmap_count"] == 7
     assert row["io_flags_direct"] == 42
     assert row["io_flags_sync"] == 9
+
+
+# ---- repeated inside repeated (nested fan-out) ----------------------------
+
+_NESTED_BODY = '''
+enum IoDirection { IO_DIRECTION_UNSPECIFIED=0; READ=1; WRITE=2; }
+message Entry {
+  optional uint64 start_time=1; optional uint64 end_time=2;
+  optional uint64 accumulated_io_size=3; optional uint64 accumulated_io_count=4;
+  optional bool is_sequential=5; }
+message CoreSeqRandom {
+  optional uint32 cpu_id=1; optional IoDirection dir=2; repeated Entry entries=3; }
+message Payload { repeated CoreSeqRandom per_core_seq_random=1; }'''
+
+
+def test_nested_repeated_makes_one_leaf_table():
+    """A repeated message inside a repeated message is a grouping level, not a
+    table: the leaf elements get the table, and the group's scalars come with
+    them."""
+    s = build_schema("x", _proto(_NESTED_BODY))
+
+    assert len(s.children) == 1
+    ch = s.children[0]
+    assert ch.table == "x_per_core_seq_random_entries"
+    assert ch.repeated_path == ("per_core_seq_random", "entries")
+
+    names = [c.name for c in ch.columns]
+    # the group's scalars are denormalized onto every leaf row
+    for want in ("cpu_id", "dir", "start_time", "is_sequential"):
+        assert want in names, f"{want} missing from {names}"
+    # key dimension first in ORDER BY, so one core's windows sit together
+    assert ch.order_by == ["run_id", "hostname", "cpu_id", "ts"]
+
+
+def test_nested_repeated_rows_are_additive_and_carry_their_group():
+    """2 cores x {read, write} with 2/1/3/2 windows = 8 measurements = 8 rows —
+    additive, never cores x windows. Each row carries its own cpu_id and dir."""
+    p = _proto(_NESTED_BODY)
+    schema = build_schema("x", p)
+
+    groups = [(0, 1, 2), (0, 2, 1), (1, 1, 3), (1, 2, 2)]  # cpu, dir, n_entries
+    rec = schema.wrapper_cls()
+    one = getattr(rec, schema.repeated_field).add()
+    one.generic_format.timestamp = "2026-07-27T18:02:21.000Z"
+    one.generic_format.hostname = "spark-e97e"
+    for cpu, direction, n in groups:
+        grp = one.payload.per_core_seq_random.add()
+        grp.cpu_id, grp.dir = cpu, direction
+        for i in range(n):
+            e = grp.entries.add()
+            e.start_time = 1000 + i * 100
+            e.end_time = 1100 + i * 100
+            e.accumulated_io_count = 10 * (i + 1)
+            e.is_sequential = (i % 2 == 0)
+
+    (p.parent / "x.pb").write_bytes(rec.SerializeToString())
+    store = MemoryStore(); store.connect()
+    res = load_unit([p.parent / "x.pb"], schema, store, "run-1", 100)
+
+    expected_rows = sum(n for _, _, n in groups)          # 2+1+3+2 = 8
+    assert res.records == 1                               # one record
+    assert store.count("x") == 1                          # one main row
+    assert store.count("x_per_core_seq_random_entries") == expected_rows == 8
+
+    cols = [c.name for c in store.columns["x_per_core_seq_random_entries"]]
+    rows = [dict(zip(cols, r)) for r in store.tables["x_per_core_seq_random_entries"]]
+
+    # every row carries the cpu_id/dir of the group it came from
+    seen = {}
+    for r in rows:
+        seen[(r["cpu_id"], r["dir"])] = seen.get((r["cpu_id"], r["dir"]), 0) + 1
+        assert r["record_id"] == 0                        # all from the one record
+    assert seen == {(0, 1): 2, (0, 2): 1, (1, 1): 3, (1, 2): 2}
+
+    # entry order within a group is preserved, so ORDER BY start_time works
+    core1_reads = [r for r in rows if r["cpu_id"] == 1 and r["dir"] == 1]
+    assert [r["start_time"] for r in core1_reads] == [1000, 1100, 1200]

@@ -84,9 +84,41 @@ def _set_scalar(msg, field, gi: int) -> None:
     elif cpp == field.CPPTYPE_BOOL:
         setattr(msg, field.name, gi % 2 == 0)
     elif cpp == field.CPPTYPE_ENUM:
-        setattr(msg, field.name, 0)
+        # cycle through the declared values, skipping the 0 default where the
+        # enum has real ones — otherwise a column like `dir` is UNSPECIFIED on
+        # every row and never exercises the values queries group by.
+        vals = [v.number for v in field.enum_type.values if v.number != 0] or [0]
+        setattr(msg, field.name, vals[gi % len(vals)])
     else:  # any int -> cumulative counter
         setattr(msg, field.name, _counter_value(field, gi))
+
+
+def _fill_repeated(parent, field, gi: int, depth: int = 0) -> None:
+    """Add elements to a repeated message field, recursing when an element
+    itself holds a repeated message (per_core_seq_random[].entries[])."""
+    rep = getattr(parent, field.name)
+    for k in range(_sub_count(field.name, gi)):
+        _fill_element(rep.add(), gi + k, k, depth)
+
+
+def _fill_element(msg, gi: int, k: int, depth: int) -> None:
+    """Fill one repeated element. At the outermost level the first scalar is the
+    key dimension (queue_id / cpu_id) so it enumerates 0..N; deeper levels get
+    ordinary counter values."""
+    from google.protobuf.descriptor import FieldDescriptor as FD
+    key_dim = depth == 0
+    for f in msg.DESCRIPTOR.fields:
+        if f.is_repeated and f.type == FD.TYPE_MESSAGE:
+            _fill_repeated(msg, f, gi, depth + 1)
+        elif f.is_repeated:
+            continue                       # repeated scalar — loader rejects these
+        elif f.type == FD.TYPE_MESSAGE:
+            _fill_nested(getattr(msg, f.name), gi)
+        elif key_dim:
+            setattr(msg, f.name, k)        # key dimension
+            key_dim = False
+        else:
+            _set_scalar(msg, f, gi)
 
 
 def _fill_nested(msg, gi: int) -> None:
@@ -128,14 +160,7 @@ def make_wrapper(schema, count: int, start: int = 0):
         p = getattr(rec, schema.payload_field)
         for f in p.DESCRIPTOR.fields:
             if f.is_repeated and f.type == FD.TYPE_MESSAGE:
-                rep = getattr(p, f.name)
-                for k in range(_sub_count(f.name, gi)):
-                    sub = rep.add()
-                    for idx, sf in enumerate(sub.DESCRIPTOR.fields):
-                        if idx == 0:
-                            setattr(sub, sf.name, k)        # key dim: queue_id/cpu_id
-                        else:
-                            _set_scalar(sub, sf, gi + k)
+                _fill_repeated(p, f, gi)
             elif not f.is_repeated and f.type == FD.TYPE_MESSAGE:
                 # 1:1 group (e.g. io_flags) — the loader flattens it onto the
                 # row, so fill it too or those columns would always be zero.

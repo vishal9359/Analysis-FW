@@ -63,13 +63,24 @@ class Column:
 
 @dataclass
 class ChildSchema:
-    """A table for one `repeated <Message>` field in the payload (e.g. per_queue).
-    One row per sub-element per record, carrying the header + record_id."""
-    table: str                     # <stem>_<repeated_field>
-    repeated_field: str            # payload field to iterate (e.g. "per_queue")
-    sub_fields: list[str]          # scalar field names of the sub-message
+    """A table for one `repeated <Message>` path in the payload.
+
+    Usually one level (payload.per_queue). When a repeated message contains a
+    further repeated message (payload.per_core_seq_random[].entries[]), the
+    table holds the LEAF elements and each ancestor level's scalars are
+    denormalized onto every row — so one measurement is one row, carrying the
+    cpu_id/dir it belongs to, with no JOIN and no N x M blow-up.
+    """
+    table: str                     # <stem>_<repeated path joined by _>
+    repeated_path: tuple           # ("per_core_seq_random", "entries")
+    level_fields: list             # per level: the scalar FieldPaths at that level
     columns: list[Column]
     order_by: list[str]
+
+    @property
+    def repeated_field(self) -> str:
+        """The first repeated field — the one iterated on the payload."""
+        return self.repeated_path[0]
 
 
 @dataclass
@@ -150,21 +161,26 @@ def _collect_scalars(msg_desc, base: tuple, depth: int,
 
 
 def _split_payload(payload_desc, source: str):
-    """Split a payload into values that live on the record's own row and
-    repeated sub-messages that become child tables.
+    """The payload's own row values plus its repeated sub-messages."""
+    return _split_message(payload_desc, "payload", source)
+
+
+def _split_message(msg_desc, label: str, source: str):
+    """Split a message into values that live on its own row and repeated
+    sub-messages that fan out.
 
         scalar             1:1 -> a column
         singular message   1:1 -> flattened into prefixed columns on the same row
-        repeated message   1:N -> its own child table
+        repeated message   1:N -> fans out (its own table, or a deeper level)
     """
     paths, cols, repeated = [], [], []
-    for f in payload_desc.fields:
+    for f in msg_desc.fields:
         if f.is_repeated:
             if f.type != FD.TYPE_MESSAGE:
                 raise SchemaError(
-                    f"{source}: payload.{f.name} is a repeated scalar; only "
+                    f"{source}: {label}.{f.name} is a repeated scalar; only "
                     f"repeated messages (which become child tables) are supported")
-            repeated.append(f)          # 1:N -> its own child table
+            repeated.append(f)          # 1:N -> fans out
             continue
         if f.type == FD.TYPE_MESSAGE:
             # 1:1 group (e.g. io_flags) -> flatten onto this row, prefixed
@@ -175,11 +191,30 @@ def _split_payload(payload_desc, source: str):
             continue
         ch = _PROTO_TO_CH.get(f.type)
         if ch is None:
-            raise SchemaError(f"{source}: payload.{f.name} has unsupported "
+            raise SchemaError(f"{source}: {label}.{f.name} has unsupported "
                               f"protobuf type {f.type}")
         paths.append((f.name,))
         cols.append(Column(f.name, ch))
     return paths, cols, repeated
+
+
+def _walk_repeated(f, path: tuple, level_fields: list, ancestor_cols: list,
+                   source: str, out: list) -> None:
+    """Collect one leaf table per repeated path.
+
+    A repeated message that itself contains a repeated message is a grouping
+    level, not a table: its scalars become ancestor columns on the rows below
+    it. Recursion means any nesting depth works, not just two."""
+    path = path + (f.name,)
+    own_paths, own_cols, nested = _split_message(f.message_type, f.name, source)
+    level_fields = level_fields + [own_paths]
+    cols = ancestor_cols + own_cols
+
+    if not nested:                       # leaf -> this is a table
+        out.append((path, level_fields, cols))
+        return
+    for nf in nested:                    # grouping level -> descend
+        _walk_repeated(nf, path, level_fields, cols, source, out)
 
 
 def _detect(pool, primary_file, source: str):
@@ -287,16 +322,24 @@ def build_schema_from_descriptor(stem: str, descriptor_bytes: bytes,
     # record_id + the sub-message's scalar fields. Ordered by its key dimension
     # (the sub-message's first field, e.g. queue_id / cpu_id) for fast filtering.
     children: list[ChildSchema] = []
+    # Each repeated path contributes one table of LEAF elements; a repeated
+    # message that contains another repeated message is a grouping level whose
+    # scalars are denormalized onto the rows below it.
+    leaves: list = []
     for f in repeated:
-        sub_names, sub_cols = _scalar_columns(f.message_type, source)
-        if not sub_names:
-            raise SchemaError(f"{source}: payload.{f.name} sub-message has no fields")
-        child_cols = lead + [rid] + generic_cols + sub_cols + trail
-        _check_unique(child_cols, f"{source}:{f.name}")
-        key_dim = sub_cols[0].name  # convention: first field is the dimension key
+        _walk_repeated(f, (), [], [], source, leaves)
+
+    for path, level_fields, own_cols in leaves:
+        if not own_cols:
+            raise SchemaError(
+                f"{source}: payload.{'.'.join(path)} has no scalar fields to store")
+        child_cols = lead + [rid] + generic_cols + own_cols + trail
+        _check_unique(child_cols, f"{source}:{'.'.join(path)}")
+        key_dim = own_cols[0].name  # convention: first field is the dimension key
         children.append(ChildSchema(
-            table=f"{stem}_{f.name}", repeated_field=f.name, sub_fields=sub_names,
-            columns=child_cols, order_by=["run_id", "hostname", key_dim, "ts"]))
+            table=f"{stem}_{'_'.join(path)}", repeated_path=path,
+            level_fields=level_fields, columns=child_cols,
+            order_by=["run_id", "hostname", key_dim, "ts"]))
 
     _check_unique(main_cols, source)
 

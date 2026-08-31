@@ -28,8 +28,11 @@ docs/
 ├── timestamp-format.md       ← timestamp contract + parsing
 ├── decisions/                ← ADRs — append-only; "why is it built this way?"
 │   ├── README.md             ← ADR index + how to add one
-│   └── 0001…0007-*.md        ← ClickHouse · runtime-schema · .pb-format · src-layout ·
-│                                id-stopgap · append-only · streaming-ladder
+│   ├── 0001…0007-*.md        ← ClickHouse · runtime-schema · .pb-format · src-layout ·
+│   │                            id-stopgap · append-only · streaming-ladder
+│   └── 0010-payload-field-shapes-to-tables.md
+│                              ← how field shape decides the table (0008/0009 are
+│                                taken on the `query` / `go_version` branches)
 └── reference/                ← imported snapshots from D:\Frameworks (SOURCE, not canonical)
     ├── README.md             ← index of everything below
     ├── requirements/         ← Frameworks.txt (source of truth), prod/module reqs,
@@ -60,7 +63,7 @@ where it and an ADR disagree, the ADR wins.
 
 ## Status (keep this current)
 
-- **Now:** Module 1 offline loader — **built, 22 tests pass**, in good shape.
+- **Now:** Module 1 offline loader — **built, 28 tests pass**, in good shape.
 - **Next:** POC 2 — live streaming ingestion at fleet scale (see [docs/roadmap.md](docs/roadmap.md)).
 - **Deferred debt** (all tracked in ADRs): append-only reload, single-node
   `run_id`/`record_id`, schema auto-migrate.
@@ -80,12 +83,21 @@ where it and an ADR disagree, the ADR wins.
   derives everything from the `.proto` by structure. protobuf 7.x: use
   `FieldDescriptor.is_repeated` (not `.label`). See
   [ADR-0002](docs/decisions/0002-runtime-schema-from-proto.md).
+- **Field shape decides the table:** scalar → column · singular message → flattened
+  prefixed columns · repeated → child table · repeated-inside-repeated → one leaf table
+  with the outer level's scalars denormalized onto each row · repeated scalar →
+  rejected. Add a shape by extending these rules, never by special-casing a field name.
+  See [ADR-0010](docs/decisions/0010-payload-field-shapes-to-tables.md).
 - **Ingest is append-only** (re-loading a run duplicates rows) — see
   [ADR-0006](docs/decisions/0006-mvp-append-only-ingest.md).
 - **Timestamps** stored as RFC 3339 UTC; the loader tolerates several formats and
   clamps out-of-range — see [docs/timestamp-format.md](docs/timestamp-format.md).
 - **Commit/push only when asked.** Git user is **vishal9359**; remote is
   `github.com/vishal9359/Analysis-FW`. Co-author trailer as configured.
+- **Three live branches** — `main` (Python), `query` (+ database seam, ADR-0008),
+  `go_version` (+ Go port, ADR-0009). They have diverged: a loader fix generally needs
+  applying to both the Python and Go implementations, and a new ADR on `main` must skip
+  the numbers the other branches already use.
 
 ## Environment
 

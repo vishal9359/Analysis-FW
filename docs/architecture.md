@@ -44,7 +44,8 @@ discover → registry → reader → worker → store
 - **discover** — walk the run dir, pair each `<stem>.proto` with its `.pb` part(s).
 - **registry** — compile the `.proto` at runtime → derive ClickHouse table(s)+columns.
 - **reader** — parse each `.pb` (one wrapper message), iterate records.
-- **worker** — flatten a record → row(s): scalars → main table, repeated → child tables.
+- **worker** — flatten a record → row(s): scalars and 1:1 groups → main table,
+  repeated → child tables (leaf rows carry their group's scalars).
 - **store** — create tables if absent; batched INSERT (ClickHouse; in-memory for tests).
 
 Design rationale is in [design.md](design.md); the block-metric queries in
@@ -62,8 +63,13 @@ Design rationale is in [design.md](design.md); the block-metric queries in
   hostname, component, tag, log_level) and a `payload` field (layer data). The loader
   finds record/header/payload/wrapper **by structure and field name, not by message
   name** — so protos may reuse `StatLog`/`Payload` names freely.
-- `repeated <Message>` payload fields (e.g. NVMe `per_queue`, `per_core`) become
-  **child tables**, linked to the main row by a `record_id`.
+- Payload fields map to tables **by shape**: a singular sub-message (e.g. syscall
+  `io_flags`) is flattened onto the main row with prefixed columns; a
+  `repeated <Message>` (e.g. NVMe `per_queue`, `per_core`) becomes a **child table**
+  linked by `record_id`; a repeated message *inside* a repeated message (e.g.
+  `per_core_seq_random[].entries[]`) becomes **one leaf table** with the outer level's
+  scalars denormalized onto every row. Full rules:
+  [decisions/0010-payload-field-shapes-to-tables.md](decisions/0010-payload-field-shapes-to-tables.md).
 
 Full format notes: [reference/requirements/profile-log-format-details.txt](reference/requirements/profile-log-format-details.txt).
 

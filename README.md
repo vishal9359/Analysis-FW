@@ -141,15 +141,45 @@ message StatLogs      { repeated StatLog stat_logs = 1; }       // a .pb file
 - `ENGINE = MergeTree`, `PARTITION BY run_id`, `ORDER BY (run_id, hostname, ts)`.
   `run_id` is the run directory name.
 
-**Repeated sub-messages → child tables.** If a `Payload` has `repeated <Message>`
-fields (e.g. NVMe `per_queue`, `per_core`), each becomes its own child table
-`<stem>_<field>`:
+**Payload fields map to tables by shape.** The loader never hardcodes field names —
+it decides from each field's cardinality relative to the record:
+
+| Payload field | Cardinality | Becomes |
+|---|---|---|
+| scalar | 1:1 | a column on the main row |
+| singular message (`io_flags`) | 1:1 | flattened onto the main row: `io_flags_direct`, `io_flags_sync`, … |
+| `repeated <Message>` (`per_queue`) | 1:N | child table `<stem>_per_queue` |
+| repeated inside repeated (`per_core_seq_random[].entries[]`) | 1:N:M | leaf table `<stem>_per_core_seq_random_entries` |
+| repeated scalar | — | rejected — the loader errors out |
 
 - One record → **1 main row + N + M child rows** (additive, never N×M).
 - A `record_id` (UInt64) links them: `main JOIN child USING (run_id, record_id)`.
 - Child tables carry the header + `record_id` + their own fields, ordered by
   their key dimension (`queue_id` / `cpu_id`) for fast filtering.
 - Scalar-only payloads (e.g. block) get no `record_id` and no child tables.
+
+**Nested repeated fields get one table, not two.** A repeated message that itself holds
+a repeated message is a *grouping level*, not a table. Its scalars are copied onto every
+leaf row, so one measurement is one row and no JOIN is needed:
+
+```
+Payload
+└── per_core_seq_random[]        cpu_id, dir          ← grouping level, no table
+    └── entries[]                start_time, …        ← leaf, gets the table
+
+linux_nvme_2_lbarandomness_per_core_seq_random_entries
+  run_id  ts  record_id  <header>  cpu_id  dir  start_time  end_time
+          accumulated_io_size  accumulated_io_count  is_sequential  _loaded_at
+  ORDER BY (run_id, hostname, cpu_id, ts)
+```
+
+2 cores × {read, write} with 2/1/3/2 windows → **8 rows**, each carrying its own
+`cpu_id` and `dir`. Per-group aggregates come from `GROUP BY cpu_id, dir`.
+
+> ClickHouse does not preserve insertion order, so proto element order is **not**
+> recoverable from the table — always `ORDER BY start_time` (add `record_id` to
+> disambiguate across records). Producers must emit an ordering key on every leaf
+> element. See [ADR-0010](docs/decisions/0010-payload-field-shapes-to-tables.md).
 
 ## Configuration
 

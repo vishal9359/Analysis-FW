@@ -129,6 +129,23 @@ def _value_at(msg, path: tuple):
     return getattr(msg, path[-1])
 
 
+def _iter_repeated(msg, repeated_path: tuple, level_fields: list,
+                   depth: int = 0, acc: tuple = ()):
+    """Walk a chain of repeated fields, yielding one value tuple per LEAF
+    element with every ancestor level's scalars carried down onto it.
+
+    For payload.per_core_seq_random[].entries[] this yields one tuple per entry,
+    each already carrying its group's cpu_id/dir — so a measurement is one row
+    and no JOIN is needed. Rows are additive (total leaves), never N x M."""
+    for el in getattr(msg, repeated_path[depth]):
+        vals = acc + tuple(_value_at(el, path) for path in level_fields[depth])
+        if depth + 1 == len(repeated_path):
+            yield vals
+        else:
+            yield from _iter_repeated(el, repeated_path, level_fields,
+                                      depth + 1, vals)
+
+
 def load_unit(pb_parts: list[Path], schema: TableSchema, store: Store,
               run_id: str, batch_size: int) -> UnitResult:
     """Load one unit into its main table plus a child table per repeated payload
@@ -189,10 +206,8 @@ def load_unit(pb_parts: list[Path], schema: TableSchema, store: Store,
 
             for ch in children:
                 cb = child_batches[ch.table]
-                for sub in getattr(p, ch.repeated_field):
-                    cb.append((run_id, ts, record_id, *gen_vals,
-                               *(_value_at(sub, path) for path in ch.sub_fields),
-                               loaded_at))
+                for vals in _iter_repeated(p, ch.repeated_path, ch.level_fields):
+                    cb.append((run_id, ts, record_id, *gen_vals, *vals, loaded_at))
                 if len(cb) >= batch_size:
                     flush_child(ch)
 
