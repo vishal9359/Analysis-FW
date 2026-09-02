@@ -6,6 +6,7 @@ ClickHouse insert is validated separately on a server.
 """
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,8 @@ from src.runner import find_runs, run_batch, run_load
 from src.store.memory import MemoryStore
 from src.worker import load_unit, parse_ts
 
+from make_fixture import COUNTS, DEFAULT_COUNT  # noqa: E402  (record counts)
+
 FIXTURE = HERE / "_fixture" / "ProfileData-fixture-20260727-180221"
 
 NVME = "linux_nvme_1_stats"
@@ -40,11 +43,35 @@ def _cfg(workers=1, batch=250):
                   "INFO", "text")
 
 
+PROTO_DIR = HERE / "sample_protos"
+
+
+def _proto_stems() -> set[str]:
+    return {p.stem for p in PROTO_DIR.glob("*.proto")}
+
+
 @pytest.fixture(scope="session", autouse=True)
 def build_fixture():
-    if not FIXTURE.exists():
-        subprocess.run([sys.executable, str(HERE / "make_fixture.py"),
-                        str(HERE / "_fixture")], check=True)
+    """Rebuild the fixture whenever the sample protos change.
+
+    Keying only on "does the directory exist" let the fixture go stale: adding
+    or editing a .proto changed nothing and the tests kept passing against data
+    the loader would never actually be given. Hash the protos instead.
+    """
+    h = hashlib.sha256()
+    for p in sorted(PROTO_DIR.glob("*.proto")):
+        h.update(p.name.encode())
+        h.update(p.read_bytes())
+    want = h.hexdigest()
+    stamp = HERE / "_fixture" / ".protos.sha256"
+
+    if (FIXTURE.exists() and stamp.exists()
+            and stamp.read_text().strip() == want):
+        return
+    shutil.rmtree(HERE / "_fixture", ignore_errors=True)
+    subprocess.run([sys.executable, str(HERE / "make_fixture.py"),
+                    str(HERE / "_fixture")], check=True)
+    stamp.write_text(want)
 
 
 def _units():
@@ -59,7 +86,8 @@ def _schema(stem):
 
 def test_discover_finds_units_and_splits():
     u = _units()
-    assert set(u) == {BLOCK1, "linux_block_2_misc", NVME, NVME2}
+    assert set(u) == _proto_stems()      # every sample proto becomes a unit
+    assert {BLOCK1, NVME, NVME2} <= set(u)
     assert len(u[BLOCK1].pb_parts) == 2       # split wrapper files
 
 
@@ -170,7 +198,8 @@ def test_full_load_counts():
     store = MemoryStore(); store.connect()
     report = run_load(FIXTURE, _cfg(), store=store)
     assert report.status == "complete"
-    assert report.records == 1900                  # 1000 + 400 + 300 + 200
+    expected = sum(COUNTS.get(s, (DEFAULT_COUNT, 0))[0] for s in _proto_stems())
+    assert report.records == expected
     assert store.count(BLOCK1) == 1000                   # both split files
     assert store.count("linux_block_2_misc") == 400
     assert store.count(NVME) == 300                      # main = 1 per record
@@ -464,3 +493,51 @@ def test_nested_repeated_rows_are_additive_and_carry_their_group():
     # entry order within a group is preserved, so ORDER BY start_time works
     core1_reads = [r for r in rows if r["cpu_id"] == 1 and r["dir"] == 1]
     assert [r["start_time"] for r in core1_reads] == [1000, 1100, 1200]
+
+
+# ---- the fixture generator models the proto it generates for ---------------
+
+def test_fixture_generates_both_directions_per_core():
+    """The profiler emits every core x direction combination — 12 cores gives up
+    to 24 level-1 groups, the same cpu_id appearing once as READ and once as
+    WRITE. A fixture that gave each core a single direction would never exercise
+    the case the leaf table exists for."""
+    u = _units()[NVME2]
+    schema = build_schema(NVME2, u.proto_path)
+    store = MemoryStore(); store.connect()
+    load_unit(u.pb_parts, schema, store, "run-1", 10_000)
+
+    table = f"{NVME2}_per_core_seq_random_entries"
+    cols = [c.name for c in store.columns[table]]
+    rows = [dict(zip(cols, r)) for r in store.tables[table]]
+
+    first = [r for r in rows if r["record_id"] == 0]
+    reads = {r["cpu_id"] for r in first if r["dir"] == 1}
+    writes = {r["cpu_id"] for r in first if r["dir"] == 2}
+    assert reads and writes, "fixture produced only one direction"
+    assert reads == writes, "every core should report both READ and WRITE"
+
+
+def test_fixture_measurement_windows_are_real_intervals():
+    """start_time/end_time must be one interval, not two independent counters:
+    end after start, and windows within a (core, direction) strictly ordered so
+    `ORDER BY start_time` reconstructs the measurement order the DB can't keep."""
+    u = _units()[NVME2]
+    schema = build_schema(NVME2, u.proto_path)
+    store = MemoryStore(); store.connect()
+    load_unit(u.pb_parts, schema, store, "run-1", 10_000)
+
+    table = f"{NVME2}_per_core_seq_random_entries"
+    cols = [c.name for c in store.columns[table]]
+    rows = [dict(zip(cols, r)) for r in store.tables[table]]
+
+    assert all(r["end_time"] > r["start_time"] for r in rows)
+
+    group = [r for r in rows
+             if r["record_id"] == 0 and r["cpu_id"] == 0 and r["dir"] == 1]
+    assert len(group) >= 2
+    starts = [r["start_time"] for r in group]
+    assert starts == sorted(starts) and len(set(starts)) == len(starts)
+    # non-overlapping within the group
+    assert all(a["end_time"] <= b["start_time"]
+               for a, b in zip(group, group[1:]))

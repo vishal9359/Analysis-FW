@@ -1,0 +1,44 @@
+syntax = "proto3";
+package ssd_smart_stats;
+option go_package = "linux_tracer/proto;main";
+
+message GenericFormat {
+    optional string timestamp = 1;
+    optional string hostname = 2;
+    optional uint32 component = 3;
+    optional string tag = 4;
+    optional uint32 log_level = 5;
+}
+
+message Payload {
+    optional string device = 1;
+
+    optional uint64 critical_warning = 2;
+    optional uint32 composite_temperature_kelvin = 3;
+    optional uint32 available_spare = 4;
+    optional uint32 available_spare_threshold = 5;
+    optional uint32 percentage_used = 6;
+
+    optional uint64 data_units_read = 7;
+    optional uint64 data_units_written = 8;
+    optional uint64 host_read_commands = 9;
+    optional uint64 host_write_commands = 10;
+    optional uint64 controller_busy_time = 11;
+    optional uint64 power_cycles = 12;
+    optional uint64 power_on_hours = 13;
+    optional uint64 unsafe_shutdowns = 14;
+    optional uint64 media_errors = 15;
+    optional uint64 number_of_error_information_log_entries = 16;
+
+    optional uint32 warning_composite_temperature_time = 17;
+    optional uint32 critical_composite_temperature_time = 18;
+}
+
+message StatLog {
+    GenericFormat generic_format = 1;
+    Payload payload = 2;
+}
+
+message StatLogs {
+    repeated StatLog stats_log = 1;
+}

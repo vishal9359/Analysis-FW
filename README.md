@@ -204,6 +204,26 @@ python tests/make_fixture.py /tmp/fix --protos <proto_dir>   # from the real pro
 python -m src /tmp/fix/ProfileData-fixture-20260727-180221
 ```
 
+It generates from **any** `.proto` by structure — drop a new one in and it is
+picked up, no code change. What it models beyond "fill every field":
+
+- **Grouping levels fan out over their dimensions.** A repeated message with a
+  key dimension *and* an enum (`NvmeCoreSeqRandom{cpu_id, dir, entries[]}`) gets
+  every combination — 12 cores × {READ, WRITE} = 24 groups, each core appearing
+  once per direction, which is what the profiler actually emits.
+- **Leaf measurement windows are real intervals.** `start_time`/`end_time` tile
+  the record's second per group — ordered, non-overlapping, `end > start` —
+  rather than two independent counters. That makes `ORDER BY start_time` return
+  the measurement order, the only ordering the database can give back.
+- **Counters are phased per group**, so cores differ from one another instead of
+  every group reporting identical numbers.
+- **Enums cycle their declared values**, so a column like `dir` is never
+  `UNSPECIFIED` on every row.
+
+The test suite rebuilds the fixture whenever any `.proto` changes (it hashes
+them into `tests/_fixture/.protos.sha256`), so the fixture cannot drift from the
+protos the loader is given.
+
 Deriving per-second IOPS, bandwidth, and latency from the loaded counters — with
 ready ClickHouse and Grafana queries — is in
 [docs/block-metrics.md](docs/block-metrics.md).

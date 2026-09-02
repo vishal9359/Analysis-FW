@@ -93,32 +93,86 @@ def _set_scalar(msg, field, gi: int) -> None:
         setattr(msg, field.name, _counter_value(field, gi))
 
 
-def _fill_repeated(parent, field, gi: int, depth: int = 0) -> None:
+# A record covers one second of wall clock. Leaf measurement windows
+# (per_core_seq_random[].entries[]) tile that second, so start_time/end_time are
+# a real interval instead of two unrelated counters — and so `ORDER BY
+# start_time` returns them in the order they were measured, which is the only
+# ordering the database can give back (ClickHouse does not preserve insertion
+# order; see docs/decisions/0010-payload-field-shapes-to-tables.md).
+_NS = 1_000_000_000
+_EPOCH_NS = int(BASE_TIME.timestamp()) * _NS
+_WINDOW_FIELDS = {"start_time": 0, "end_time": 1}
+
+
+def _window(gi: int, slot: int, j: int, n: int) -> tuple[int, int]:
+    """The j-th of n measurement windows in record `gi`, for group `slot`.
+    Non-overlapping within a group, skewed across groups so cores don't all
+    report byte-identical timestamps."""
+    span = _NS // max(n, 1)
+    start = _EPOCH_NS + gi * _NS + (slot * 7919) % span + j * span
+    return start, start + span * 3 // 4          # 75% busy, 25% idle gap
+
+
+def _enum_dimension(msg_desc):
+    """The categorical dimension a grouping level fans out over, if it has one.
+
+    NvmeCoreSeqRandom{cpu_id, dir, entries[]} is measured for every combination
+    of its key dimension and its enum — 12 cores x {READ, WRITE} = 24 groups,
+    the same cpu_id appearing once per direction. Without this each core would
+    get exactly one direction and the fixture would never produce the shape the
+    leaf table exists to hold.
+    """
+    from google.protobuf.descriptor import FieldDescriptor as FD
+    for f in msg_desc.fields:
+        if not f.is_repeated and f.type == FD.TYPE_ENUM:
+            vals = [v.number for v in f.enum_type.values if v.number != 0]
+            if vals:
+                return f.name, vals
+    return None, [None]
+
+
+def _fill_repeated(parent, field, gi: int, depth: int = 0, slot: int = 0) -> None:
     """Add elements to a repeated message field, recursing when an element
     itself holds a repeated message (per_core_seq_random[].entries[])."""
     rep = getattr(parent, field.name)
-    for k in range(_sub_count(field.name, gi)):
-        _fill_element(rep.add(), gi + k, k, depth)
+    enum_name, enum_vals = (_enum_dimension(field.message_type) if depth == 0
+                            else (None, [None]))
+    n = _sub_count(field.name, gi)
+    i = 0
+    for k in range(n):
+        for ev in enum_vals:                 # key dimension x direction
+            child_slot = i if depth == 0 else slot
+            win = _window(gi, child_slot, k, n) if depth else None
+            _fill_element(rep.add(), gi, k, depth, child_slot, enum_name, ev, win)
+            i += 1
 
 
-def _fill_element(msg, gi: int, k: int, depth: int) -> None:
+def _fill_element(msg, gi: int, k: int, depth: int, slot: int = 0,
+                  enum_name: str | None = None, enum_val=None, win=None) -> None:
     """Fill one repeated element. At the outermost level the first scalar is the
-    key dimension (queue_id / cpu_id) so it enumerates 0..N; deeper levels get
-    ordinary counter values."""
+    key dimension (queue_id / cpu_id) so it enumerates 0..N and the enum is
+    pinned to the value this group stands for; a leaf element gets a real
+    measurement window rather than two independent counters."""
     from google.protobuf.descriptor import FieldDescriptor as FD
     key_dim = depth == 0
     for f in msg.DESCRIPTOR.fields:
         if f.is_repeated and f.type == FD.TYPE_MESSAGE:
-            _fill_repeated(msg, f, gi, depth + 1)
+            _fill_repeated(msg, f, gi, depth + 1, slot)
         elif f.is_repeated:
             continue                       # repeated scalar — loader rejects these
         elif f.type == FD.TYPE_MESSAGE:
             _fill_nested(getattr(msg, f.name), gi)
+        elif f.name == enum_name:
+            setattr(msg, f.name, enum_val)  # the direction this group stands for
         elif key_dim:
-            setattr(msg, f.name, k)        # key dimension
+            setattr(msg, f.name, k)         # key dimension
             key_dim = False
+        elif win and f.name in _WINDOW_FIELDS:
+            setattr(msg, f.name, win[_WINDOW_FIELDS[f.name]])
         else:
-            _set_scalar(msg, f, gi)
+            # phase counters by group and element, so cores differ from each
+            # other instead of every group reporting the same numbers
+            _set_scalar(msg, f, gi + k + slot)
 
 
 def _fill_nested(msg, gi: int) -> None:

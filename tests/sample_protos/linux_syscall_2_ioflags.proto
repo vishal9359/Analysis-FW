@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package iopattern;
+
+option go_package = "linux_tracer/proto;main";
+
+message IOFlags {
+    optional uint64 nowait      = 1;
+    optional uint64 write       = 2;
+    optional uint64 dsync       = 3;
+    optional uint64 sync        = 4;
+    optional uint64 append      = 5;
+    optional uint64 hiprio      = 6;
+    optional uint64 atomic      = 7;
+    optional uint64 doncache    = 8;
+    optional uint64 nosignal    = 9;
+    optional uint64 eventfd     = 10;
+    optional uint64 direct      = 11;
+    optional uint64 waitq       = 12;
+    optional uint64 noio        = 13;
+    optional uint64 alloc_cache = 14;
+    optional uint64 aio_rw      = 15;
+    optional uint64 has_metadata = 16;
+}
+
+message IOStats {
+    optional uint64 io_count          = 1;
+    optional uint64 io_size           = 2;
+    optional uint64 buffered_io_count = 3;
+    optional uint64 buffered_io_size  = 4;
+    optional uint64 direct_io_count   = 5;
+    optional uint64 direct_io_size    = 6;
+}
+
+message GenericFormat {
+    optional string timestamp = 1;
+    optional string hostname = 2;
+    optional uint32 component = 3;
+    optional string tag       = 4;
+    optional uint32 log_level = 5;
+}
+
+message Payload {
+    IOStats read_io_stats = 1;
+    IOFlags read_io_flags = 2;
+    IOStats write_io_stats = 3;
+    IOFlags write_io_flags = 4;
+}
+
+message StatLog {
+    GenericFormat generic_format = 1;
+    Payload       payload         = 2;
+}
+
+message StatLogs {
+    repeated StatLog stats_log = 1;
+}

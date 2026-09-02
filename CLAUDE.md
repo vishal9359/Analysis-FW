@@ -63,7 +63,7 @@ where it and an ADR disagree, the ADR wins.
 
 ## Status (keep this current)
 
-- **Now:** Module 1 offline loader — **built, 28 tests pass**, in good shape.
+- **Now:** Module 1 offline loader — **built, 30 tests pass**, in good shape.
 - **Next:** POC 2 — live streaming ingestion at fleet scale (see [docs/roadmap.md](docs/roadmap.md)).
 - **Deferred debt** (all tracked in ADRs): append-only reload, single-node
   `run_id`/`record_id`, schema auto-migrate.
@@ -77,8 +77,10 @@ where it and an ADR disagree, the ADR wins.
 - **Config:** `config/config.yaml` (repo root, editable). Override with `--config PATH`
   or `CH_HOST`/`CH_PORT` env.
 - **Test:** `python -m pytest tests/ -q` — runs the whole pipeline against an in-memory
-  store, **no database needed**. Regenerate the fixture with
-  `python tests/make_fixture.py <dir>`.
+  store, **no database needed**. The fixture rebuilds automatically when any
+  `tests/sample_protos/*.proto` changes; generate one by hand with
+  `python tests/make_fixture.py <dir>`. Adding a `.proto` there needs **no test edit** —
+  the unit set and record total are derived from the protos on disk.
 - **Schema is generic:** never hardcode payload/header field names in the loader — it
   derives everything from the `.proto` by structure. protobuf 7.x: use
   `FieldDescriptor.is_repeated` (not `.label`). See

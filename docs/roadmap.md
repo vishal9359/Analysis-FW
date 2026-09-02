@@ -32,7 +32,7 @@ design). Boss-level activities (detailed plan:
 - Wrapper + `generic_format`/`payload` format; repeated sub-messages → child tables.
 - Batch loading of many runs; fail-fast / `--continue-on-error`; typed exit codes.
 - Multi-format timestamp parsing → RFC 3339 UTC; per-run reconciliation.
-- 22-test suite against an in-memory store; realistic time-series fixture generator.
+- 30-test suite against an in-memory store; realistic time-series fixture generator.
 - `src/` layout, editable `config/config.yaml`, self-contained docs.
 
 Run/verify: see the [README](../README.md). Carries forward into production as the
