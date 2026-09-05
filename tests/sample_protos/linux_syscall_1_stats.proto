@@ -33,33 +33,61 @@ message GenericFormat {
     optional string timestamp = 1;
     optional string hostname = 2;
     optional uint32 component = 3;
-    optional string tag       = 4;
+    optional string tag = 4;
     optional uint32 log_level = 5;
 }
 
 message Payload {
-    optional uint64 mmap_count   = 1;
+    optional uint64 mmap_count = 1;
     optional uint64 mremap_count = 2;
-    repeated SyscallsIOPattern io_patterns = 3;
-    IOFlags io_flags = 4;
-}
 
-message IOFlags {
-    optional uint64 direct  = 1; // O_DIRECT - direct IO, bypasses page cache
-    optional uint64 sync    = 2; // O_SYNC - synchronous IO (data + metadata)
-    optional uint64 dsync   = 3; // O_DSYNC - data-synchronous IO (data only)
-    optional uint64 append  = 4; // O_APPEND - append write
-    optional uint64 nowait  = 5; // O_NONBLOCK - non-blocking IO (NONWAIT semantics)
-    optional uint64 async   = 6; // FASYNC - async notification
-    optional uint64 no_cache = 7; // IOCB_DONTCARE
-    optional uint64 hiprio  = 8; // IORING_SQ_NEED_WAKEUP - high-priority io_uring IO
+    repeated SyscallsIOPattern io_patterns = 3;
 }
 
 message SyscallsIOPattern {
-    IoType           io_type      = 1;
-    optional uint64  io_size_bytes = 2;
-    optional uint64  io_count      = 3;
-    optional uint64  total_time    = 4;
+    IoType io_type = 1;
+    optional uint64 io_size_bytes = 2;
+    optional uint64 io_count = 3;
+    optional uint64 total_time_ns = 4;
+
+    SizeBuckets read_sizes = 5;
+    SizeBuckets write_sizes = 6;
+
+    RangeBuckets read_ranges = 7;
+    RangeBuckets write_ranges = 8;
+}
+
+message SizeBuckets {
+    optional uint64 BLt4KB = 1;
+    optional uint64 B4KB = 2;
+    optional uint64 B8KB = 3;
+    optional uint64 B16KB = 4;
+    optional uint64 B32KB = 5;
+    optional uint64 B64KB = 6;
+    optional uint64 B128KB = 7;
+    optional uint64 B256KB = 8;
+    optional uint64 B512KB = 9;
+    optional uint64 B1MB = 10;
+    optional uint64 B2MB = 11;
+    optional uint64 B4MB = 12;
+    optional uint64 B8MB = 13;
+    optional uint64 BGt8MB = 14;
+    optional uint64 BUnaligned = 15;
+}
+
+message RangeBuckets {
+    optional uint64 lt_4kb = 1;
+    optional uint64 k4_to_k8 = 2;
+    optional uint64 k8_to_k16 = 3;
+    optional uint64 k16_to_k32 = 4;
+    optional uint64 k32_to_k64 = 5;
+    optional uint64 k64_to_k128 = 6;
+    optional uint64 k128_to_k256 = 7;
+    optional uint64 k256_to_k512 = 8;
+    optional uint64 k512_to_m1 = 9;
+    optional uint64 m1_to_m2 = 10;
+    optional uint64 m2_to_m4 = 11;
+    optional uint64 m4_to_m8 = 12;
 }
 
 message StatLog {

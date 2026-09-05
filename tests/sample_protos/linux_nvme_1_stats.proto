@@ -1,4 +1,6 @@
 syntax = "proto3";
+package nvme_stats;
+option go_package = "linux_tracer/proto;main";
 
 message GenericFormat {
     optional string timestamp = 1;
@@ -6,6 +8,89 @@ message GenericFormat {
     optional uint32 component = 3;
     optional string tag = 4;
     optional uint32 log_level = 5;
+}
+
+message Payload {
+    optional uint64 read_ios = 1;
+    optional uint64 write_ios = 2;
+
+    optional uint64 read_kbs = 3;
+    optional uint64 write_kbs = 4;
+
+    optional uint64 read_lt_4kb = 5;
+    optional uint64 read_4kb = 6;
+    optional uint64 read_8kb = 7;
+    optional uint64 read_16kb = 8;
+    optional uint64 read_32kb = 9;
+    optional uint64 read_64kb = 10;
+    optional uint64 read_128kb = 11;
+    optional uint64 read_256kb = 12;
+    optional uint64 read_512kb = 13;
+    optional uint64 read_1mb = 14;
+    optional uint64 read_2mb = 15;
+    optional uint64 read_4mb = 16;
+    optional uint64 read_8mb = 17;
+    optional uint64 read_gt_8mb = 18;
+    optional uint64 read_unaligned = 19;
+
+    optional uint64 write_lt_4kb = 20;
+    optional uint64 write_4kb = 21;
+    optional uint64 write_8kb = 22;
+    optional uint64 write_16kb = 23;
+    optional uint64 write_32kb = 24;
+    optional uint64 write_64kb = 25;
+    optional uint64 write_128kb = 26;
+    optional uint64 write_256kb = 27;
+    optional uint64 write_512kb = 28;
+    optional uint64 write_1mb = 29;
+    optional uint64 write_2mb = 30;
+    optional uint64 write_4mb = 31;
+    optional uint64 write_8mb = 32;
+    optional uint64 write_gt_8mb = 33;
+    optional uint64 write_unaligned = 34;
+
+    optional uint64 read_lt_4kb_range = 35;
+    optional uint64 read_4kto8k_range = 36;
+    optional uint64 read_8kto16k_range = 37;
+    optional uint64 read_16kto32k_range = 38;
+    optional uint64 read_32kto64k_range = 39;
+    optional uint64 read_64kto128k_range = 40;
+    optional uint64 read_128kto256k_range = 41;
+    optional uint64 read_256kto512k_range = 42;
+    optional uint64 read_512kto1m_range = 43;
+    optional uint64 read_1mto2m_range = 44;
+    optional uint64 read_2mto4m_range = 45;
+    optional uint64 read_4mto8m_range = 46;
+
+    optional uint64 write_lt_4kb_range = 47;
+    optional uint64 write_4kto8k_range = 48;
+    optional uint64 write_8kto16k_range = 49;
+    optional uint64 write_16kto32k_range = 50;
+    optional uint64 write_32kto64k_range = 51;
+    optional uint64 write_64kto128k_range = 52;
+    optional uint64 write_128kto256k_range = 53;
+    optional uint64 write_256kto512k_range = 54;
+    optional uint64 write_512kto1m_range = 55;
+    optional uint64 write_1mto2m_range = 56;
+    optional uint64 write_2mto4m_range = 57;
+    optional uint64 write_4mto8m_range = 58;
+
+    optional uint64 read_device_time_ns = 59;
+    optional uint64 write_device_time_ns = 60;
+    optional uint64 read_nvme_driver_time_ns = 61;
+    optional uint64 write_nvme_driver_time_ns = 62;
+
+    repeated NvmeQueueStat per_queue = 63;
+    repeated NvmeCoreStat per_core = 64;
+
+    repeated LbaRange lba_ranges = 65;
+}
+
+message LbaRange {
+    optional uint64 range_start = 1;
+    optional uint64 range_end = 2;
+    optional uint64 read_ios = 3;
+    optional uint64 write_ios = 4;
 }
 
 message NvmeQueueStat {
@@ -20,23 +105,11 @@ message NvmeCoreStat {
     optional uint64 write_ios = 3;
 }
 
-message Payload {
-    // device-level scalar fields (a few standing in for the real ~24)
-    optional string device = 1;
-    optional uint64 read_ios = 2;
-    optional uint64 write_ios = 3;
-    optional uint64 io_time = 4;
-
-    // repeated sub-messages -> their own child tables; counts vary per record
-    repeated NvmeQueueStat per_queue = 25;
-    repeated NvmeCoreStat  per_core  = 26;
-}
-
 message StatLog {
     GenericFormat generic_format = 1;
     Payload payload = 2;
 }
 
 message StatLogs {
-    repeated StatLog stat_logs = 1;
+    repeated StatLog stats_log = 1;
 }

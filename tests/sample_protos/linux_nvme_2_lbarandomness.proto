@@ -4,8 +4,15 @@ option go_package = "linux_tracer/proto;main";
 
 enum IoDirection {
     IO_DIRECTION_UNSPECIFIED = 0;
-    READ  = 1;
+    READ = 1;
     WRITE = 2;
+}
+
+enum PatternType {
+    PATTERN_TYPE_UNSPECIFIED = 0;
+    IDLE_PATTERN = 1;
+    SEQUENTIAL_PATTERN = 2;
+    RANDOM_PATTERN = 3;
 }
 
 message GenericFormat {
@@ -17,17 +24,17 @@ message GenericFormat {
 }
 
 message NvmeSeqRandomEntry {
-    optional uint64      start_time           = 1;
-    optional uint64      end_time             = 2;
-    optional uint64      accumulated_io_size  = 3;
-    optional uint64      accumulated_io_count = 4;
-    optional bool        is_sequential        = 5;
+    optional uint64 start_time = 1;
+    optional uint64 end_time = 2;
+    optional uint64 accumulated_io_size = 3;
+    optional uint64 accumulated_io_count = 4;
+    optional PatternType pattern_type = 5;
 }
 
 message NvmeCoreSeqRandom {
-    optional uint32      cpu_id               = 1;
-    optional IoDirection dir                  = 2;
-    repeated NvmeSeqRandomEntry entries       = 3;
+    optional uint32 cpu_id = 1;
+    optional IoDirection dir = 2;
+    repeated NvmeSeqRandomEntry entries = 3;
 }
 
 message Payload {
@@ -36,7 +43,7 @@ message Payload {
 
 message StatLog {
     GenericFormat generic_format = 1;
-    Payload payload                = 2;
+    Payload payload = 2;
 }
 
 message StatLogs {
