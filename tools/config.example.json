@@ -4,7 +4,6 @@
     "defaultModel": "gemma4",
     "timeoutSeconds": 10,
     "rateLimitSeconds": 0,
-    "numCtx": 8192,
     "maxContextTokens": 127488,
     "apiKey": "",
     "customHeaders": {

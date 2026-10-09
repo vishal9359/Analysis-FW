@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 780" width="960" height="780" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+<defs>
+<marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5F6368"/></marker>
+<marker id="ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B3261E"/></marker>
+</defs>
+<rect width="960" height="780" fill="#ffffff"/>
+
+<text x="40" y="30" font-size="17" font-weight="700" fill="#202124">Analysis FW — the six parts</text>
+<rect x="40" y="42" width="13" height="13" rx="3" fill="#FFF4E5" stroke="#C77700"/><text x="60" y="53" font-size="12" fill="#3C4043">process control</text>
+<rect x="170" y="42" width="13" height="13" rx="3" fill="#E8F0FE" stroke="#1A5FB4"/><text x="190" y="53" font-size="12" fill="#3C4043">knowledge written by engineers</text>
+<rect x="392" y="42" width="13" height="13" rx="3" fill="#E6F4EA" stroke="#1E7B34"/><text x="412" y="53" font-size="12" fill="#3C4043">plain code, no AI</text>
+<rect x="530" y="42" width="13" height="13" rx="3" fill="#F3E8FD" stroke="#6B3FA0"/><text x="550" y="53" font-size="12" fill="#3C4043">AI</text>
+<rect x="582" y="42" width="13" height="13" rx="3" fill="#FDE8E8" stroke="#B3261E"/><text x="602" y="53" font-size="12" fill="#3C4043">checking</text>
+
+<!-- inputs -->
+<rect x="40" y="72" width="264" height="56" rx="6" fill="#F1F3F4" stroke="#9AA0A6"/>
+<text x="172" y="95" font-size="13" font-weight="600" text-anchor="middle" fill="#202124">ClickHouse</text>
+<text x="172" y="113" font-size="11.5" text-anchor="middle" fill="#5F6368">profiled data, put there by the loader</text>
+
+<rect x="328" y="72" width="264" height="56" rx="6" fill="#F1F3F4" stroke="#9AA0A6"/>
+<text x="460" y="95" font-size="13" font-weight="600" text-anchor="middle" fill="#202124">FIO job file + FIO results</text>
+<text x="460" y="113" font-size="11.5" text-anchor="middle" fill="#5F6368">given as file paths</text>
+
+<rect x="616" y="72" width="264" height="56" rx="6" fill="#F1F3F4" stroke="#9AA0A6"/>
+<text x="748" y="95" font-size="13" font-weight="600" text-anchor="middle" fill="#202124">Workload details</text>
+<text x="748" y="113" font-size="11.5" text-anchor="middle" fill="#5F6368">model, settings, event times</text>
+
+<line x1="172" y1="128" x2="172" y2="152" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+<line x1="460" y1="128" x2="460" y2="152" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+<line x1="748" y1="128" x2="748" y2="152" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+
+<!-- 1 controller -->
+<rect x="40" y="156" width="840" height="62" rx="6" fill="#FFF4E5" stroke="#C77700" stroke-width="1.6"/>
+<text x="460" y="180" font-size="14" font-weight="700" text-anchor="middle" fill="#8A5200">1 · CONTROLLER — plain code that runs the whole process</text>
+<text x="460" y="199" font-size="11.5" text-anchor="middle" fill="#5F6368">writes down what the analysis covers before starting · runs the steps in order · no check can be skipped</text>
+<text x="460" y="213" font-size="11.5" text-anchor="middle" fill="#5F6368">limits time, cost and retries · sends out only the report the Validator approved</text>
+
+<line x1="172" y1="218" x2="172" y2="246" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+<line x1="460" y1="218" x2="460" y2="246" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+<line x1="748" y1="218" x2="748" y2="246" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+
+<!-- 2 knowledge -->
+<rect x="40" y="250" width="264" height="212" rx="6" fill="#E8F0FE" stroke="#1A5FB4" stroke-width="1.4"/>
+<text x="172" y="272" font-size="13.5" font-weight="700" text-anchor="middle" fill="#0B3D91">2 · KNOWLEDGE</text>
+<text x="172" y="288" font-size="11" text-anchor="middle" fill="#1A5FB4">written and corrected by engineers</text>
+<text x="56" y="314" font-size="12" font-weight="600" fill="#202124">Measurement Catalog</text>
+<text x="56" y="331" font-size="11" fill="#5F6368">what each field means · its unit</text>
+<text x="56" y="345" font-size="11" fill="#5F6368">counter or gauge · how to calculate it</text>
+<text x="56" y="359" font-size="11" fill="#5F6368">which data versions it applies to</text>
+<text x="56" y="388" font-size="12" font-weight="600" fill="#202124">Domain Knowledge</text>
+<text x="56" y="405" font-size="11" fill="#5F6368">how Linux I/O and SSDs work</text>
+<text x="56" y="419" font-size="11" fill="#5F6368">the layers in order, and what normally</text>
+<text x="56" y="433" font-size="11" fill="#5F6368">changes between neighbouring layers</text>
+<text x="56" y="447" font-size="11" fill="#5F6368">our devices · normal ranges · past findings</text>
+
+<!-- 3 evidence engine -->
+<rect x="328" y="250" width="264" height="212" rx="6" fill="#E6F4EA" stroke="#1E7B34" stroke-width="1.4"/>
+<text x="460" y="272" font-size="13.5" font-weight="700" text-anchor="middle" fill="#14602A">3 · EVIDENCE ENGINE</text>
+<text x="460" y="288" font-size="11" text-anchor="middle" fill="#1E7B34">plain code and SQL — no AI</text>
+<text x="344" y="312" font-size="12" fill="#202124"><tspan font-weight="600">Metric Engine</tspan> — calculates numbers</text>
+<text x="344" y="332" font-size="12" fill="#202124"><tspan font-weight="600">Phase Detector</tspan> — finds phases</text>
+<text x="344" y="352" font-size="12" fill="#202124"><tspan font-weight="600">Digest Builder</tspan> — short summary</text>
+<text x="344" y="372" font-size="12" fill="#202124"><tspan font-weight="600">Consistency Checks</tspan> — does it add up?</text>
+<text x="344" y="392" font-size="12" fill="#202124"><tspan font-weight="600">Comparison Engine</tspan> — run vs run</text>
+<line x1="344" y1="408" x2="576" y2="408" stroke="#1E7B34" stroke-dasharray="3 3"/>
+<text x="344" y="426" font-size="11" fill="#5F6368">every number is labelled with its run,</text>
+<text x="344" y="440" font-size="11" fill="#5F6368">device, time window, unit, and the query</text>
+<text x="344" y="454" font-size="11" fill="#5F6368">that produced it</text>
+
+<!-- 4 analyst + investigator -->
+<rect x="616" y="250" width="264" height="212" rx="6" fill="#F3E8FD" stroke="#6B3FA0" stroke-width="1.4"/>
+<text x="748" y="272" font-size="13.5" font-weight="700" text-anchor="middle" fill="#52307C">4 · ANALYST + INVESTIGATOR</text>
+<text x="748" y="288" font-size="11" text-anchor="middle" fill="#6B3FA0">AI — reaches data only through tools</text>
+<text x="632" y="312" font-size="12" font-weight="600" fill="#202124">Analyst — every analysis</text>
+<text x="632" y="328" font-size="11" fill="#5F6368">reads the summary · asks for more data</text>
+<text x="632" y="342" font-size="11" fill="#5F6368">writes the draft report</text>
+<text x="632" y="366" font-size="12" font-weight="600" fill="#202124">Investigator — only when needed</text>
+<text x="632" y="382" font-size="11" fill="#5F6368">called when a check fails or something</text>
+<text x="632" y="396" font-size="11" fill="#5F6368">cannot be explained · finds the cause</text>
+<line x1="632" y1="408" x2="864" y2="408" stroke="#6B3FA0" stroke-dasharray="3 3"/>
+<text x="632" y="426" font-size="11" fill="#5F6368">labels every statement: fact · knowledge</text>
+<text x="632" y="440" font-size="11" fill="#5F6368">· interpretation · hypothesis</text>
+<text x="632" y="454" font-size="11" font-weight="600" fill="#52307C">never calculates a number itself</text>
+
+<line x1="304" y1="356" x2="324" y2="356" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+<line x1="592" y1="356" x2="612" y2="356" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+
+<line x1="172" y1="462" x2="172" y2="490" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+<line x1="460" y1="462" x2="460" y2="490" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+<line x1="748" y1="462" x2="748" y2="490" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+
+<!-- 5 validator -->
+<rect x="40" y="494" width="840" height="120" rx="6" fill="#FDE8E8" stroke="#B3261E" stroke-width="1.6"/>
+<text x="460" y="516" font-size="14" font-weight="700" text-anchor="middle" fill="#8C1D18">5 · VALIDATOR — checks every report before anyone sees it</text>
+<rect x="60" y="526" width="390" height="54" rx="4" fill="#ffffff" stroke="#E5B4B1"/>
+<text x="72" y="544" font-size="11.5" font-weight="600" fill="#202124">Checked by code (exact):</text>
+<text x="72" y="560" font-size="11" fill="#5F6368">every number is recalculated and compared</text>
+<text x="72" y="574" font-size="11" fill="#5F6368">right run, device, time window and units</text>
+<rect x="470" y="526" width="390" height="54" rx="4" fill="#ffffff" stroke="#E5B4B1"/>
+<text x="482" y="544" font-size="11.5" font-weight="600" fill="#202124">Checked by a separate AI:</text>
+<text x="482" y="560" font-size="11" fill="#5F6368">is each statement supported by its data?</text>
+<text x="482" y="574" font-size="11" fill="#5F6368">does it contradict Knowledge? is missing data admitted?</text>
+<text x="460" y="602" font-size="11.5" text-anchor="middle" fill="#8C1D18">wrong statements are sent back · clearly-labelled interpretations are kept</text>
+
+<line x1="460" y1="614" x2="460" y2="640" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+
+<!-- send-back loop -->
+<path d="M880 553 L920 553 L920 187 L884 187" fill="none" stroke="#B3261E" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#ahr)"/>
+<text x="916" y="370" font-size="11" fill="#B3261E" text-anchor="middle" transform="rotate(90 916 370)">sent back · more data needed</text>
+
+<!-- 6 evidence store + output -->
+<rect x="40" y="644" width="400" height="62" rx="6" fill="#F1F3F4" stroke="#9AA0A6"/>
+<text x="240" y="667" font-size="13" font-weight="600" text-anchor="middle" fill="#202124">6 · EVIDENCE STORE</text>
+<text x="240" y="685" font-size="11" text-anchor="middle" fill="#5F6368">a permanent record: inputs, versions, queries,</text>
+<text x="240" y="699" font-size="11" text-anchor="middle" fill="#5F6368">results, decisions, every version of the report</text>
+
+<rect x="480" y="644" width="400" height="62" rx="6" fill="#F1F3F4" stroke="#9AA0A6"/>
+<text x="680" y="667" font-size="13" font-weight="600" text-anchor="middle" fill="#202124">TO THE ENGINEER</text>
+<text x="680" y="685" font-size="11" text-anchor="middle" fill="#5F6368">the approved report — or, if not approved,</text>
+<text x="680" y="699" font-size="11" text-anchor="middle" fill="#5F6368">a notice saying why it was held back</text>
+
+<line x1="440" y1="675" x2="476" y2="675" stroke="#5F6368" stroke-width="1.4" marker-end="url(#ah)"/>
+
+<text x="40" y="738" font-size="11" fill="#80868B">Only the Controller can send a report out. If a time or cost limit is reached, the report is held back with the reason —</text>
+<text x="40" y="754" font-size="11" fill="#80868B">it is never released unchecked.</text>
+</svg>

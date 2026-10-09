@@ -14,7 +14,8 @@ What it checks
               a forced call, several calls at once, a multi-step
               text-to-SQL loop like the real system, a long argument like an
               app file), JSON output, repeatability, response times against
-              timeoutSeconds, and whether a prompt longer than numCtx is cut.
+              timeoutSeconds, and whether a long prompt (~16k tokens, or
+              longer than numCtx when that is set) is silently cut.
               Optional: a long-context test up to maxContextTokens.
   Grafana     health and version, login, the ClickHouse data source, a query
               through Grafana, and an optional write test that creates and
@@ -30,7 +31,8 @@ Usage, from the repo root
 
 Settings come from tools/config.json (git-ignored: it holds credentials):
 the "llm" block (baseUrl, defaultModel, customHeaders, timeoutSeconds,
-numCtx, maxContextTokens, optional apiKey and rateLimitSeconds) and the
+maxContextTokens; optional apiKey, rateLimitSeconds, and numCtx for a local
+Ollama model) and the
 optional "clickhouse" and "grafana" blocks. Environment variables CH_URL,
 CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE, GRAFANA_URL,
 GRAFANA_TOKEN, GRAFANA_USER and GRAFANA_PASSWORD override the file.
@@ -642,7 +644,8 @@ def check_llm(args, ctx) -> None:
     record(g, "configuration", INFO,
            f"{s['endpoint']}, model {s['model']}, headers {', '.join(s['customHeaders']) or 'none'}"
            f"; timeoutSeconds {s['timeoutSeconds']} (heavier checks use {llm.timeout:g} s), "
-           f"numCtx {s['numCtx']}, maxContextTokens {s['maxContextTokens']}")
+           + (f"numCtx {s['numCtx']}, " if s.get("numCtx") else "")
+           + f"maxContextTokens {s['maxContextTokens']}")
 
     # model list --------------------------------------------------------
     r = http("GET", llm.models_url, llm.headers, timeout=30, insecure=args.insecure)
@@ -839,15 +842,15 @@ def check_llm(args, ctx) -> None:
                f"the server rejected these optional parameters, so they were dropped: "
                f"{', '.join(sorted(llm.dropped))}")
 
-    # prompt longer than numCtx (always) and long context (optional) -------------------
-    num_ctx = int(settings.get("numCtx") or 8192)
+    # a long prompt (always) and long context (optional) --------------------------------
+    num_ctx = int(settings["numCtx"]) if settings.get("numCtx") else None
     max_ctx = int(settings.get("maxContextTokens") or 0)
     if args.context_sizes:
         sizes = [int(x) for x in args.context_sizes.split(",") if x.strip()]
     elif args.context_test:
         sizes = sorted({16000, 64000, int(max_ctx * 0.85) if max_ctx else 110000})
-    else:
-        sizes = [int(num_ctx * 1.5)]
+    else:  # our data descriptions will need ~20-40k tokens: prove a long one survives
+        sizes = [int(num_ctx * 1.5) if num_ctx else 16000]
     check_context(args, llm, g, sizes, num_ctx, full=args.context_test)
 
     # response times against timeoutSeconds ---------------------------------------------
@@ -962,9 +965,9 @@ def check_agent_loop(args, ctx, llm, g) -> None:
 def check_context(args, llm, g, sizes, num_ctx, full) -> None:
     """Plant a code near the START of a long prompt and ask for it back.
 
-    A server that cannot hold the prompt (Ollama does this to anything longer
-    than numCtx) drops the start without an error, so the code is lost - and
-    the reported prompt_tokens comes back short of the real size."""
+    A server that cannot hold the prompt (a local Ollama model does this to
+    anything longer than numCtx) can drop the start without an error, so the
+    code is lost - and the reported prompt_tokens comes back short."""
     outcome = []
     for size in sizes:
         code = f"ZX-{size % 9973:04d}-Q"
@@ -999,11 +1002,15 @@ def check_context(args, llm, g, sizes, num_ctx, full) -> None:
 
     cut = any(o["cut"] for o in outcome)
     ok = len(outcome) == len(sizes) and all(o["found"] and not o["cut"] for o in outcome)
-    name = "long context" if full else f"prompt longer than numCtx ({num_ctx:,})"
+    name = ("long context" if full else
+            f"prompt longer than numCtx ({num_ctx:,})" if num_ctx else
+            f"long prompt (~{sizes[0]:,} tokens)")
     worked = [o["approx_tokens"] for o in outcome if o["found"] and not o["cut"]]
     if cut:
-        hint = (f" - if the model runs on Ollama, numCtx ({num_ctx:,}) is the limit; our "
-                "data descriptions will need roughly 20,000-40,000 tokens, so it must be raised")
+        limit = (f"numCtx ({num_ctx:,}) is the limit, so it must be raised" if num_ctx
+                 else "find out the gateway's real context limit")
+        hint = (f" - {limit}; our data descriptions will need roughly "
+                "20,000-40,000 tokens")
     elif not ok:
         hint = (f" - the largest prompt that worked was ~{max(worked):,} tokens"
                 if worked else " - even the smallest prompt failed")

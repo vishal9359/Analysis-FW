@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 840" width="960" height="840" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+<defs>
+<marker id="bh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5F6368"/></marker>
+<marker id="bhr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#B3261E"/></marker>
+<marker id="bhp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6B3FA0"/></marker>
+</defs>
+<rect width="960" height="840" fill="#ffffff"/>
+
+<text x="40" y="30" font-size="17" font-weight="700" fill="#202124">How one analysis runs</text>
+<text x="40" y="50" font-size="12" fill="#5F6368">FIO checks and real workloads go through the same six steps. Only the inputs and the main question differ.</text>
+
+<!-- the two modes -->
+<rect x="40" y="66" width="400" height="84" rx="6" fill="#F8F9FA" stroke="#9AA0A6" stroke-width="1.4"/>
+<text x="240" y="88" font-size="13.5" font-weight="700" text-anchor="middle" fill="#202124">FIO CHECK</text>
+<text x="56" y="108" font-size="11.5" fill="#3C4043"><tspan font-weight="600">Inputs:</tspan> FIO job file · FIO results · profiled data</text>
+<text x="56" y="125" font-size="11.5" fill="#3C4043"><tspan font-weight="600">Question:</tspan> does the data show what FIO did,</text>
+<text x="56" y="141" font-size="11.5" fill="#3C4043">and do the graphs show it correctly?</text>
+
+<rect x="520" y="66" width="400" height="84" rx="6" fill="#F8F9FA" stroke="#9AA0A6" stroke-width="1.4"/>
+<text x="720" y="88" font-size="13.5" font-weight="700" text-anchor="middle" fill="#202124">REAL WORKLOAD (e.g. LLM fine-tuning)</text>
+<text x="536" y="108" font-size="11.5" fill="#3C4043"><tspan font-weight="600">Inputs:</tspan> workload details · profiled data</text>
+<text x="536" y="125" font-size="11.5" fill="#3C4043"><tspan font-weight="600">Question:</tspan> what did the workload do in each phase</text>
+<text x="536" y="141" font-size="11.5" fill="#3C4043">and layer, and how did it use the SSD?</text>
+
+<path d="M240 150 L240 170 L480 170" fill="none" stroke="#5F6368" stroke-width="1.4"/>
+<path d="M720 150 L720 170 L480 170" fill="none" stroke="#5F6368" stroke-width="1.4"/>
+<line x1="480" y1="170" x2="480" y2="196" stroke="#5F6368" stroke-width="1.4" marker-end="url(#bh)"/>
+
+<!-- step 1 -->
+<rect x="250" y="200" width="460" height="64" rx="6" fill="#E6F4EA" stroke="#1E7B34" stroke-width="1.4"/>
+<text x="266" y="222" font-size="13" font-weight="700" fill="#14602A">1 · Check the inputs</text>
+<rect x="652" y="208" width="46" height="20" rx="10" fill="#ffffff" stroke="#1E7B34"/><text x="675" y="222" font-size="11" font-weight="600" text-anchor="middle" fill="#14602A">code</text>
+<text x="266" y="240" font-size="11" fill="#5F6368">Are all files present, from the same run, and readable?</text>
+<text x="266" y="254" font-size="11" fill="#5F6368">Do we know what every field means?</text>
+<line x1="480" y1="264" x2="480" y2="282" stroke="#5F6368" stroke-width="1.4" marker-end="url(#bh)"/>
+
+<!-- step 2 -->
+<rect x="250" y="286" width="460" height="64" rx="6" fill="#E6F4EA" stroke="#1E7B34" stroke-width="1.4"/>
+<text x="266" y="308" font-size="13" font-weight="700" fill="#14602A">2 · Check each calculation before it runs</text>
+<rect x="652" y="294" width="46" height="20" rx="10" fill="#ffffff" stroke="#1E7B34"/><text x="675" y="308" font-size="11" font-weight="600" text-anchor="middle" fill="#14602A">code</text>
+<text x="266" y="326" font-size="11" fill="#5F6368">Right table, filters, units and time window?</text>
+<text x="266" y="340" font-size="11" fill="#5F6368">Is a gauge being subtracted by mistake?</text>
+<line x1="480" y1="350" x2="480" y2="368" stroke="#5F6368" stroke-width="1.4" marker-end="url(#bh)"/>
+
+<!-- step 3 -->
+<rect x="250" y="372" width="460" height="64" rx="6" fill="#E6F4EA" stroke="#1E7B34" stroke-width="1.4"/>
+<text x="266" y="394" font-size="13" font-weight="700" fill="#14602A">3 · Calculate, and check the results</text>
+<rect x="652" y="380" width="46" height="20" rx="10" fill="#ffffff" stroke="#1E7B34"/><text x="675" y="394" font-size="11" font-weight="600" text-anchor="middle" fill="#14602A">code</text>
+<text x="266" y="412" font-size="11" fill="#5F6368">Run the data checks · find the phases · calculate numbers per phase</text>
+<text x="266" y="426" font-size="11" fill="#5F6368">Build the short summary · confirm the results are complete and add up</text>
+<line x1="480" y1="436" x2="480" y2="454" stroke="#5F6368" stroke-width="1.4" marker-end="url(#bh)"/>
+
+<!-- step 4 -->
+<rect x="250" y="458" width="460" height="64" rx="6" fill="#F3E8FD" stroke="#6B3FA0" stroke-width="1.6"/>
+<text x="266" y="480" font-size="13" font-weight="700" fill="#52307C">4 · Analyst writes the draft</text>
+<rect x="664" y="466" width="34" height="20" rx="10" fill="#ffffff" stroke="#6B3FA0"/><text x="681" y="480" font-size="11" font-weight="600" text-anchor="middle" fill="#52307C">AI</text>
+<text x="266" y="498" font-size="11" fill="#5F6368">Reads the summary and asks for more data when needed</text>
+<text x="266" y="512" font-size="11" fill="#5F6368">Labels every statement and links it to the data behind it</text>
+<line x1="480" y1="522" x2="480" y2="540" stroke="#5F6368" stroke-width="1.4" marker-end="url(#bh)"/>
+
+<!-- investigator side box -->
+<rect x="734" y="450" width="196" height="80" rx="6" fill="#FAF5FF" stroke="#6B3FA0" stroke-width="1.3" stroke-dasharray="5 3"/>
+<text x="746" y="470" font-size="12" font-weight="700" fill="#52307C">Investigator (AI)</text>
+<text x="746" y="487" font-size="11" fill="#5F6368">called only when a check failed</text>
+<text x="746" y="501" font-size="11" fill="#5F6368">or something can't be explained</text>
+<text x="746" y="519" font-size="11" font-weight="600" fill="#52307C">→ finds the likely cause</text>
+<line x1="712" y1="490" x2="730" y2="490" stroke="#6B3FA0" stroke-width="1.3" stroke-dasharray="4 2" marker-start="url(#bhp)" marker-end="url(#bhp)"/>
+
+<!-- step 5 -->
+<rect x="250" y="544" width="460" height="64" rx="6" fill="#FDE8E8" stroke="#B3261E" stroke-width="1.6"/>
+<text x="266" y="566" font-size="13" font-weight="700" fill="#8C1D18">5 · Validator checks the draft</text>
+<rect x="626" y="552" width="72" height="20" rx="10" fill="#ffffff" stroke="#B3261E"/><text x="662" y="566" font-size="11" font-weight="600" text-anchor="middle" fill="#8C1D18">code + AI</text>
+<text x="266" y="584" font-size="11" fill="#5F6368">Code recalculates every number · a separate AI checks each statement</text>
+<text x="266" y="598" font-size="11" fill="#5F6368">Wrong statements go back · clearly-labelled interpretations are kept</text>
+<line x1="480" y1="608" x2="480" y2="626" stroke="#5F6368" stroke-width="1.4" marker-end="url(#bh)"/>
+
+<!-- send-back loops -->
+<path d="M250 572 L186 572 L186 490 L246 490" fill="none" stroke="#B3261E" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#bhr)"/>
+<text x="178" y="535" font-size="10.5" fill="#B3261E" text-anchor="end">fix it</text>
+<path d="M250 590 L126 590 L126 404 L246 404" fill="none" stroke="#B3261E" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#bhr)"/>
+<text x="118" y="500" font-size="10.5" fill="#B3261E" text-anchor="end">need more</text>
+<text x="118" y="514" font-size="10.5" fill="#B3261E" text-anchor="end">data</text>
+
+<!-- step 6 -->
+<rect x="250" y="630" width="460" height="64" rx="6" fill="#FFF4E5" stroke="#C77700" stroke-width="1.6"/>
+<text x="266" y="652" font-size="13" font-weight="700" fill="#8A5200">6 · Check the final report, then release it</text>
+<rect x="652" y="638" width="46" height="20" rx="10" fill="#ffffff" stroke="#C77700"/><text x="675" y="652" font-size="11" font-weight="600" text-anchor="middle" fill="#8A5200">code</text>
+<text x="266" y="670" font-size="11" fill="#5F6368">The finished report, tables included, is checked once more</text>
+<text x="266" y="684" font-size="11" fill="#5F6368">Only this approved version is sent out</text>
+
+<line x1="480" y1="694" x2="480" y2="716" stroke="#5F6368" stroke-width="1.4" marker-end="url(#bh)"/>
+
+<!-- outcomes -->
+<rect x="40" y="720" width="280" height="52" rx="6" fill="#E6F4EA" stroke="#1E7B34"/>
+<text x="180" y="741" font-size="12.5" font-weight="700" text-anchor="middle" fill="#14602A">Approved</text>
+<text x="180" y="759" font-size="11" text-anchor="middle" fill="#5F6368">sent to the engineer</text>
+
+<rect x="340" y="720" width="280" height="52" rx="6" fill="#FFF4E5" stroke="#C77700"/>
+<text x="480" y="741" font-size="12.5" font-weight="700" text-anchor="middle" fill="#8A5200">Sent back</text>
+<text x="480" y="759" font-size="11" text-anchor="middle" fill="#5F6368">the affected steps are repeated</text>
+
+<rect x="640" y="720" width="280" height="52" rx="6" fill="#FDE8E8" stroke="#B3261E"/>
+<text x="780" y="741" font-size="12.5" font-weight="700" text-anchor="middle" fill="#8C1D18">Held back</text>
+<text x="780" y="759" font-size="11" text-anchor="middle" fill="#5F6368">with the reason, e.g. missing data</text>
+
+<text x="40" y="802" font-size="11" fill="#80868B">A report that correctly says “this FIO check failed” is a good report and is sent — finding the failure is the point.</text>
+<text x="40" y="818" font-size="11" fill="#80868B">A report is held back only when the report itself could not be checked.</text>
+</svg>

@@ -75,14 +75,19 @@ def headers(llm: dict) -> dict:
 
 
 def summary(llm: dict) -> dict:
-    """Safe to print or save: header NAMES only, never their values."""
-    return {
+    """Safe to print or save: header NAMES only, never their values.
+
+    numCtx is listed only when set: it matters for a local (Ollama) model,
+    which silently cuts prompts longer than numCtx."""
+    out = {
         "endpoint": chat_url(llm),
         "model": llm.get("defaultModel"),
         "timeoutSeconds": llm.get("timeoutSeconds"),
         "rateLimitSeconds": llm.get("rateLimitSeconds", 0),
-        "numCtx": llm.get("numCtx"),
         "maxContextTokens": llm.get("maxContextTokens"),
         "apiKey": "set" if llm.get("apiKey") else "not set",
         "customHeaders": sorted(str(k) for k in (llm.get("customHeaders") or {})),
     }
+    if llm.get("numCtx"):
+        out["numCtx"] = llm.get("numCtx")
+    return out

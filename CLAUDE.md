@@ -22,6 +22,16 @@ docs/
 ├── overview.md               ← charter: what/why, sub-frameworks, ownership, data shape
 ├── architecture.md           ← end-to-end data flow; current MVP vs streaming target
 ├── roadmap.md                ← POC 1 done · MVP now · POC 2 next · deferred · open questions
+├── goals-and-requirements.md ← goals + requirements (DRAFT): Phase 1 = plain-language
+│                             request to Grafana graph; Phase 2+ = automated reports
+├── phase1-tool-research.md   ← open-source tool comparison for Phase 1 (+ sources)
+├── goals-and-requirements_codex.md ← earlier 5-goal requirements draft (superseded)
+├── Profile-code-flow.md      ← how Profile FW works: eBPF → maps → Go collectors → .pb
+├── Tracepoints-details.md    ← every tracepoint / kprobe / sysfs source, per collector
+├── analysis-architecture.md   ← high-level architecture of the Phase 2 report system
+│                             (DRAFT): 6 parts, 6 steps, 2 diagrams
+├── diagrams/                  ← architecture + workflow SVGs
+├── _history/                  ← superseded drafts, kept for provenance
 ├── glossary.md               ← domain terms (IO stack, eBPF, ids, DB, .pb format, streaming)
 ├── design.md                 ← MVP loader design detail
 ├── block-metrics.md          ← IOPS / bandwidth / latency query recipes
@@ -54,6 +64,9 @@ where it and an ADR disagree, the ADR wins.
 | New to the project / need the "why" & boundary | [docs/overview.md](docs/overview.md) |
 | Working on the code / data flow | [docs/architecture.md](docs/architecture.md) + [README.md](README.md) |
 | Planning next work / POC 2 / what's deferred | [docs/roadmap.md](docs/roadmap.md) |
+| Working on Phase 1 (plain-language request to graph) | [docs/goals-and-requirements.md](docs/goals-and-requirements.md) + [docs/phase1-tool-research.md](docs/phase1-tool-research.md) |
+| Working on the Phase 2 report system | [docs/goals-and-requirements.md](docs/goals-and-requirements.md) (Phase 2 part) |
+| Designing the Phase 2 report system | [docs/analysis-architecture.md](docs/analysis-architecture.md) (draft) |
 | Hitting an unfamiliar term | [docs/glossary.md](docs/glossary.md) |
 | Asking "why is it built this way?" | [docs/decisions/](docs/decisions/) (ADRs) |
 | Needing the MVP design detail | [docs/design.md](docs/design.md) |
@@ -63,8 +76,14 @@ where it and an ADR disagree, the ADR wins.
 
 ## Status (keep this current)
 
-- **Now:** Module 1 offline loader — **built, 30 tests pass**, in good shape.
-- **Next:** POC 2 — live streaming ingestion at fleet scale (see [docs/roadmap.md](docs/roadmap.md)).
+- **Now:** Module 1 offline loader — **built, in good shape**. 29 of 30 tests pass:
+  `test_nvme_children_detected` predates `lba_ranges` in the nvme_1 proto and needs
+  updating (the loader's behaviour is correct).
+- **Next:** Phase 1 — plain-language request → Grafana graph
+  ([docs/goals-and-requirements.md](docs/goals-and-requirements.md)). First run
+  `tools/check_phase1_env.py` on the office box, then the WrenAI trial
+  ([docs/phase1-tool-research.md](docs/phase1-tool-research.md)).
+  [docs/roadmap.md](docs/roadmap.md) predates this phase plan.
 - **Deferred debt** (all tracked in ADRs): append-only reload, single-node
   `run_id`/`record_id`, schema auto-migrate.
 
@@ -107,7 +126,9 @@ where it and an ADR disagree, the ADR wins.
   in-memory store and tests. The real ClickHouse insert is verified on the office box.
 - **Office test box:** Linux (IST timezone), Python 3.12, **ClickHouse 25.6 in Docker
   at `localhost:8123`, no password, database `profile_fw`**. The user pulls the repo
-  there to run against real data.
+  there to run against real data. Phase 1 readiness (LLM API, tool calling,
+  ClickHouse, Grafana) is checked there with `python tools/check_phase1_env.py`
+  (standard library only).
 
 ## How this project's context is organized (so it scales)
 
