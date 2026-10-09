@@ -6,6 +6,11 @@
     "rateLimitSeconds": 0,
     "maxContextTokens": 127488,
     "apiKey": "",
+    "systemPrompt": "You are a helpful assistant.",
+    "payload": {
+      "temperature": 0.1,
+      "max_tokens": 2048
+    },
     "customHeaders": {
       "x-dep-ticket": "credential:<your ticket>",
       "User-Type": "AD_ID",

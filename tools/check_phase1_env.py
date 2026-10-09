@@ -31,8 +31,9 @@ Usage, from the repo root
 
 Settings come from tools/config.json (git-ignored: it holds credentials):
 the "llm" block (baseUrl, defaultModel, customHeaders, timeoutSeconds,
-maxContextTokens; optional apiKey, rateLimitSeconds, and numCtx for a local
-Ollama model) and the
+maxContextTokens, systemPrompt, and "payload" - every key of which goes into
+each request body, e.g. temperature and max_tokens; optional apiKey,
+rateLimitSeconds, and numCtx for a local Ollama model) and the
 optional "clickhouse" and "grafana" blocks. Environment variables CH_URL,
 CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE, GRAFANA_URL,
 GRAFANA_TOKEN, GRAFANA_USER and GRAFANA_PASSWORD override the file.
@@ -60,13 +61,10 @@ import os
 import platform
 import re
 import shutil
-import ssl
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -124,31 +122,15 @@ class HttpResult:
 
 def http(method, url, headers=None, payload=None, data=None, timeout=60,
          insecure=False) -> HttpResult:
-    hdrs = dict(headers or {})
-    body = None
-    if payload is not None:
-        body = json.dumps(payload).encode("utf-8")
-        hdrs.setdefault("Content-Type", "application/json")
-    elif data is not None:
-        body = data if isinstance(data, bytes) else data.encode("utf-8")
-    req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
-    ctx = None
-    if url.lower().startswith("https"):
-        ctx = ssl.create_default_context()
-        if insecure:
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-    t0 = time.monotonic()
-    try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            raw, status = resp.read(), resp.status
-    except urllib.error.HTTPError as exc:
-        raw, status = exc.read(), exc.code
-    except Exception as exc:  # refused, DNS, TLS, timeout ...
-        return HttpResult(None, None, time.monotonic() - t0,
-                          f"{type(exc).__name__}: {exc}")
-    elapsed = time.monotonic() - t0
-    text = raw.decode("utf-8", errors="replace")
+    """Every request goes through llm_config.send: `requests` when installed,
+    exactly as the pipeline calls the LLM."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    status, text, elapsed, error = llm_config.send(
+        method, url, headers, json_body=payload, data=data, timeout=timeout,
+        verify=not insecure)
+    if status is None:
+        return HttpResult(None, None, elapsed, error)
     try:
         parsed = json.loads(text) if text.strip() else None
     except ValueError:
@@ -207,6 +189,11 @@ def check_machine(args) -> None:
     ver = f"{v.major}.{v.minor}.{v.micro}"
     record(g, "Python version", PASS if v >= (3, 11) else FAIL,
            f"{ver}" + ("" if v >= (3, 11) else " - wrenai needs Python 3.11 or newer"))
+    client = llm_config.client_name()
+    record(g, "HTTP client", PASS if client.startswith("requests") else WARN,
+           client + ("" if client.startswith("requests") else
+                     " - requests is what the pipeline uses; without it, certificates "
+                     "and header names may be handled differently (pip install requests)"))
 
     r = http("GET", "https://pypi.org/pypi/wrenai/json", timeout=20,
              insecure=args.insecure)
@@ -429,14 +416,30 @@ class Llm:
         self.timeout = args.llm_timeout or max(self.config_timeout, 120.0)
         self.pause = float(settings.get("rateLimitSeconds") or 0)
         self.insecure = args.insecure
+        self.params = llm_config.payload_params(settings)   # from config.json
+        self.system = llm_config.system_prompt(settings)
         self.dropped: set[str] = set()     # optional params the server rejected
         self.durations: list[float] = []   # seconds, for every answered call
         self._last = 0.0
 
     def chat(self, messages, timeout=None, **params) -> HttpResult:
+        """Body shaped like the pipeline's: a system message first (the one
+        from config.json unless the check brings its own), then every payload
+        parameter from config.json, then the check's own parameters (tools,
+        response_format, ...). A check's max_tokens only ever raises the
+        configured budget, for checks that need more room."""
+        if not messages or messages[0].get("role") != "system":
+            messages = [{"role": "system", "content": self.system}] + list(messages)
         payload = {"model": self.model, "messages": messages}
-        payload.update({k: v for k, v in params.items()
-                        if v is not None and k not in self.dropped})
+        payload.update(self.params)
+        need = params.pop("max_tokens", None)
+        if need is not None and isinstance(self.params.get("max_tokens"), int):
+            params["max_tokens"] = max(need, self.params["max_tokens"])
+        elif need is not None and "max_tokens" not in self.params:
+            params["max_tokens"] = need
+        payload.update({k: v for k, v in params.items() if v is not None})
+        for p in self.dropped:
+            payload.pop(p, None)
         r = None
         for attempt in range(4):
             wait = self.pause - (time.monotonic() - self._last)
@@ -641,8 +644,12 @@ def check_llm(args, ctx) -> None:
     ctx["llm_summary"] = llm_config.summary(settings)
     llm = Llm(settings, args)
     s = ctx["llm_summary"]
-    record(g, "configuration", INFO,
-           f"{s['endpoint']}, model {s['model']}, headers {', '.join(s['customHeaders']) or 'none'}"
+    problems = llm_config.header_problems(settings)
+    record(g, "configuration", WARN if problems else INFO,
+           (f"header {'; header '.join(problems)} - the gateway may reject requests. "
+            if problems else "")
+           + f"{s['endpoint']}, model {s['model']}, payload {s['payload']}, "
+           f"headers {', '.join(s['customHeaders']) or 'none'}"
            f"; timeoutSeconds {s['timeoutSeconds']} (heavier checks use {llm.timeout:g} s), "
            + (f"numCtx {s['numCtx']}, " if s.get("numCtx") else "")
            + f"maxContextTokens {s['maxContextTokens']}")
@@ -670,10 +677,10 @@ def check_llm(args, ctx) -> None:
 
     # plain chat ---------------------------------------------------------
     plain = [{"role": "user", "content": "Reply with exactly the word OK."}]
-    r = llm.chat(plain, max_tokens=300, temperature=0, timeout=llm.config_timeout)
+    r = llm.chat(plain, max_tokens=300, timeout=llm.config_timeout)
     slow_note = ""
     if r.status is None and "timed out" in (r.error or "").lower():
-        r = llm.chat(plain, max_tokens=300, temperature=0)
+        r = llm.chat(plain, max_tokens=300)
         slow_note = (f" - but only with a longer timeout: it took {r.elapsed:.1f} s, more "
                      f"than timeoutSeconds ({llm.config_timeout:g} s)")
     msg = Llm.message(r)
@@ -700,7 +707,7 @@ def check_llm(args, ctx) -> None:
                  "Which device was profiled in the run "
                  "'ProfileData-check-20261001-101500'? Use the tool to find out."}]
     r = llm.chat(messages, tools=[DEVICE_TOOL], tool_choice="auto",
-                 temperature=0, max_tokens=1000)
+                 max_tokens=1000)
     msg = Llm.message(r)
     if not r.ok:
         record(g, C_TOOL, FAIL, f"the server rejected a request with tools: {r.describe()}")
@@ -720,7 +727,7 @@ def check_llm(args, ctx) -> None:
                 messages.append(assistant_echo(msg, calls))
                 messages.append({"role": "tool", "tool_call_id": c["id"],
                                  "content": json.dumps({"device": "nvme3n1"})})
-                r2 = llm.chat(messages, tools=[DEVICE_TOOL], temperature=0, max_tokens=1000)
+                r2 = llm.chat(messages, tools=[DEVICE_TOOL], max_tokens=1000)
                 final = (Llm.message(r2) or {}).get("content") or ""
                 legacy = " (old 'function_call' format)" if c.get("legacy") else ""
                 if r2.ok and "nvme3n1" in final:
@@ -742,7 +749,7 @@ def check_llm(args, ctx) -> None:
                                        "function": {"name": "get_run_device"}}),
                           ("'required'", "required")):
         r = llm.chat([{"role": "user", "content": "Hello! How are you today?"}],
-                     tools=[DEVICE_TOOL], tool_choice=choice, temperature=0,
+                     tools=[DEVICE_TOOL], tool_choice=choice,
                      max_tokens=1000)
         forced[label] = bool(r.ok and tool_calls_of(Llm.message(r)))
     record(g, "forced tool call", PASS if any(forced.values()) else WARN,
@@ -756,7 +763,7 @@ def check_llm(args, ctx) -> None:
                    "Which devices were profiled in the runs "
                    "'ProfileData-a-20261001-101500' and 'ProfileData-b-20261002-101500'? "
                    "Use the tool for each run."}],
-                 tools=[DEVICE_TOOL], tool_choice="auto", temperature=0, max_tokens=1000)
+                 tools=[DEVICE_TOOL], tool_choice="auto", max_tokens=1000)
     n = len(tool_calls_of(Llm.message(r))) if r.ok else 0
     record(g, "several tool calls at once", INFO,
            f"{n} tool call(s) in one reply - "
@@ -773,7 +780,7 @@ def check_llm(args, ctx) -> None:
                    "chart of read IOPS per layer: syscall 1200, block 4800, nvme 4790. "
                    "Use plain JavaScript and inline SVG only - no external libraries or "
                    "links. Label the axes and the bars. Save it by calling write_file."}],
-                 tools=[WRITE_TOOL], tool_choice="auto", temperature=0, max_tokens=8000)
+                 tools=[WRITE_TOOL], tool_choice="auto", max_tokens=8000)
     msg = Llm.message(r)
     calls = tool_calls_of(msg) if r.ok else []
     finish = Llm.finish(r)
@@ -810,7 +817,7 @@ def check_llm(args, ctx) -> None:
                 "plain prompt": {}}
     for label, extra in variants.items():
         r = llm.chat([{"role": "user", "content": JSON_QUESTION}],
-                     temperature=0, max_tokens=1500, **extra)
+                     max_tokens=1500, **extra)
         content = (Llm.message(r) or {}).get("content") if r.ok else None
         obj = parse_json_reply(content or "")
         works[label] = bool(obj and obj.get("sql"))
@@ -824,7 +831,7 @@ def check_llm(args, ctx) -> None:
     if label:
         sqls = []
         for _ in range(2):
-            r = llm.chat([{"role": "user", "content": JSON_QUESTION}], temperature=0,
+            r = llm.chat([{"role": "user", "content": JSON_QUESTION}],
                          seed=7, max_tokens=1500, **variants[label])
             obj = parse_json_reply(((Llm.message(r) or {}).get("content") or "") if r.ok else "")
             sqls.append(" ".join(str(obj.get("sql", "")).split()) if obj else None)
@@ -832,7 +839,8 @@ def check_llm(args, ctx) -> None:
         record(g, "repeatability", PASS if same else WARN,
                "the same request twice gave the same SQL" if same else
                "the same request twice gave different SQL - our design must pin it "
-               "down (temperature 0 and confirmed examples)",
+               f"down (temperature in config.json is {llm.params.get('temperature')}; "
+               "a lower one and confirmed examples help)",
                sqls=sqls, ignored_params=sorted(llm.dropped))
     else:
         record(g, "repeatability", SKIP, "no JSON variant worked")
@@ -905,7 +913,7 @@ def check_agent_loop(args, ctx, llm, g) -> None:
     t0 = time.monotonic()
     for step in range(1, args.max_steps + 1):
         r = llm.chat(messages, tools=AGENT_TOOLS, tool_choice="auto",
-                     temperature=0, max_tokens=3000)
+                     max_tokens=3000)
         msg = Llm.message(r)
         if not (r.ok and msg is not None):
             error = f"step {step}: {r.describe()}"
@@ -978,7 +986,7 @@ def check_context(args, llm, g, sizes, num_ctx, full) -> None:
         body[at] = f"Note {at:06d}: the secret verification code is {code}.\n"
         prompt = ("".join(body) + "\nQuestion: what is the secret verification code "
                   "mentioned in the text above? Reply with the code only.")
-        r = llm.chat([{"role": "user", "content": prompt}], temperature=0, max_tokens=300,
+        r = llm.chat([{"role": "user", "content": prompt}], max_tokens=300,
                      timeout=args.context_timeout)
         content = ((Llm.message(r) or {}).get("content") or "") if r.ok else ""
         used = ((r.body or {}).get("usage") or {}).get("prompt_tokens") if r.ok else None

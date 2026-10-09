@@ -2,14 +2,15 @@
 """Is the LLM API answering? A minimal check using tools/config.json.
 
     python tools/check_llm.py
-    python tools/check_llm.py --max-tokens 8192 --timeout 60
-    python tools/check_llm.py --config other.json
+    python tools/check_llm.py --config other.json --timeout 60
 
-Sends two prompts - a tiny one, and a larger one (2-3k tokens) whose right
-answer is known - and prints, for each: HTTP status and time, finish reason, token
-counts and the answer. Explains an empty answer and a prompt that was cut.
-Standard library only; writes nothing. For the full Phase 1 check, run
-tools/check_phase1_env.py.
+Requests are built like the pipeline's: a system and a user message, every
+parameter in the "payload" block of config.json (e.g. temperature,
+max_tokens), the custom headers, sent with `requests`. Two prompts - a tiny
+one, and a larger one (2-3k tokens) whose right answer is known. For each it
+prints the HTTP status and time, finish reason, token counts and the answer,
+and explains an empty answer or a prompt that was cut. Writes nothing. For
+the full Phase 1 check, run tools/check_phase1_env.py.
 """
 from __future__ import annotations
 
@@ -17,14 +18,12 @@ import argparse
 import json
 import sys
 import time
-import urllib.error
-import urllib.request
 
 import llm_config
 
 ROWS = "".join(f"sample {i:03d}: ts=10:{i // 60:02d}:{i % 60:02d} read_ios={1000 + 37 * i}\n"
                for i in range(200))
-PROMPTS = [  # (label, prompt, text the answer must contain)
+PROMPTS = [  # (label, user prompt, text the answer must contain)
     ("tiny", "Reply with exactly: OK", "OK"),
     ("larger (200 sample rows)",
      ROWS + "\nWhat is read_ios in the last sample? Reply with the number only.",
@@ -32,22 +31,9 @@ PROMPTS = [  # (label, prompt, text the answer must contain)
 ]
 
 
-def post(url, headers, payload, timeout):
-    req = urllib.request.Request(url, json.dumps(payload).encode(), headers, method="POST")
-    t0 = time.monotonic()
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read().decode("utf-8", "replace"), time.monotonic() - t0
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read().decode("utf-8", "replace"), time.monotonic() - t0
-    except Exception as exc:  # refused, DNS, TLS, timeout
-        return None, f"{type(exc).__name__}: {exc}", time.monotonic() - t0
-
-
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Check that the LLM API answers.")
     ap.add_argument("--config", help="settings file (default: tools/config.json)")
-    ap.add_argument("--max-tokens", type=int, default=2048)
     ap.add_argument("--timeout", type=float, help="seconds (default: timeoutSeconds)")
     args = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
@@ -60,31 +46,37 @@ def main(argv=None) -> int:
     url, headers = llm_config.chat_url(llm), llm_config.headers(llm)
     timeout = args.timeout or float(llm.get("timeoutSeconds") or 120)
     pause = float(llm.get("rateLimitSeconds") or 0)
+    budget = llm_config.payload_params(llm).get("max_tokens")
     for key, value in llm_config.summary(llm).items():
         print(f"  {key:<17}: {value}")
+    print(f"  {'http client':<17}: {llm_config.client_name()}")
+    for problem in llm_config.header_problems(llm):
+        print(f"  WARNING: header {problem} - the gateway may reject the request")
 
     failed = 0
     for i, (label, prompt, expect) in enumerate(PROMPTS):
         if i and pause:
             time.sleep(pause)
         approx = len(prompt) // 4
-        payload = {"model": llm["defaultModel"], "temperature": 0,
-                   "max_tokens": args.max_tokens,
-                   "messages": [{"role": "user", "content": prompt}]}
-        status, body, secs = post(url, headers, payload, timeout)
+        status, text, secs, error = llm_config.send(
+            "POST", url, headers, json_body=llm_config.body(llm, prompt), timeout=timeout)
         print(f"\n{label} (~{approx} tokens): HTTP {status}, {secs:.1f} s")
-        if status != 200:
+        if status is None:
             hint = (f" - timed out after {timeout:g} s: raise timeoutSeconds or use --timeout"
-                    if "timed out" in body.lower() else "")
-            print(f"  FAILED{hint}\n  {body[:800]}")
+                    if "timed out" in (error or "").lower() else "")
+            print(f"  FAILED{hint}\n  {error}")
+            failed += 1
+            continue
+        if status != 200:
+            print(f"  FAILED\n  {text[:1500]}")
             failed += 1
             continue
         try:
-            data = json.loads(body)
+            data = json.loads(text)
             choice = data["choices"][0]
             msg = choice.get("message") or {}
         except (ValueError, KeyError, IndexError, TypeError):
-            print(f"  FAILED - not an OpenAI-style reply: {body[:800]}")
+            print(f"  FAILED - not an OpenAI-style reply: {text[:1500]}")
             failed += 1
             continue
         content = (msg.get("content") or "").strip()
@@ -101,9 +93,10 @@ def main(argv=None) -> int:
                   "(the server dropped part of it without an error)")
         if not content:
             print("  EMPTY ANSWER" + (
-                f" - finish_reason=length: all {args.max_tokens} tokens were spent before "
-                "an answer (a 'thinking' model reasons first); try --max-tokens 8192"
+                f" - finish_reason=length: all {budget} tokens were spent before an answer "
+                "(a 'thinking' model reasons first); raise max_tokens in config.json"
                 if finish == "length" else ""))
+            print(f"  full message: {json.dumps(msg)[:1200]}")
             failed += 1
             continue
         print(f"  answer: {content[:300]}")
