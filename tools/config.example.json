@@ -1,0 +1,30 @@
+{
+  "llm": {
+    "baseUrl": "<LLM gateway URL, e.g. https://host/v1>",
+    "defaultModel": "gemma4",
+    "timeoutSeconds": 10,
+    "rateLimitSeconds": 0,
+    "numCtx": 8192,
+    "maxContextTokens": 127488,
+    "apiKey": "",
+    "customHeaders": {
+      "x-dep-ticket": "credential:<your ticket>",
+      "User-Type": "AD_ID",
+      "User-Id": "<your id>",
+      "Send-System-Name": "rvc-api-module"
+    }
+  },
+  "clickhouse": {
+    "host": "localhost",
+    "port": 8123,
+    "user": "default",
+    "password": "",
+    "database": "profile_fw"
+  },
+  "grafana": {
+    "url": "http://localhost:3000",
+    "token": "",
+    "user": "admin",
+    "password": ""
+  }
+}

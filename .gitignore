@@ -13,3 +13,10 @@ tests/_fixture/
 # local venvs
 .venv/
 venv/
+
+# output of tools/check_phase1_env.py (machine-specific)
+phase1_check_report.json
+phase1_check_chart.html
+
+# real settings for tools/ - holds credentials; commit only config.example.json
+tools/config.json
