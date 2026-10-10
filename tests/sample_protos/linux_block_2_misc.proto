@@ -1,4 +1,5 @@
 syntax = "proto3";
+
 package blk_bio_queue_stats;
 option go_package = "linux_tracer/proto;main";
 
@@ -10,83 +11,144 @@ message GenericFormat {
     optional uint32 log_level = 5;
 }
 
+message BioOpFlags {
+    optional uint64 req_fail_fast_dev = 1;
+    optional uint64 req_fail_fast_transport = 2;
+    optional uint64 req_fail_fast_driver = 3;
+    optional uint64 req_sync = 4;
+    optional uint64 req_meta = 5;
+    optional uint64 req_prio = 6;
+    optional uint64 req_nomerge = 7;
+    optional uint64 req_idle = 8;
+    optional uint64 req_integrity = 9;
+    optional uint64 req_fua = 10;
+    optional uint64 req_preflush = 11;
+    optional uint64 req_rahead = 12;
+    optional uint64 req_background = 13;
+    optional uint64 req_nowait = 14;
+    optional uint64 req_polled = 15;
+    optional uint64 req_alloc_cache = 16;
+    optional uint64 req_swap = 17;
+    optional uint64 req_drv = 18;
+    optional uint64 req_fs_private = 19;
+    optional uint64 req_atomic = 20;
+    optional uint64 req_nounmap = 21;
+}
+
 message Payload {
     optional uint64 read_splits = 1;
     optional uint64 write_splits = 2;
 
-    optional uint64 read_lt_4kb = 3;
-    optional uint64 read_4kb = 4;
-    optional uint64 read_8kb = 5;
-    optional uint64 read_16kb = 6;
-    optional uint64 read_32kb = 7;
-    optional uint64 read_64kb = 8;
-    optional uint64 read_128kb = 9;
-    optional uint64 read_256kb = 10;
-    optional uint64 read_512kb = 11;
-    optional uint64 read_1mb = 12;
-    optional uint64 read_2mb = 13;
-    optional uint64 read_4mb = 14;
-    optional uint64 read_8mb = 15;
-    optional uint64 read_gt_8mb = 16;
-    optional uint64 read_unaligned = 17;
+    optional uint64 read_bio_back_merges = 3;
+    optional uint64 write_bio_back_merges = 4;
+    optional uint64 read_bio_front_merges = 5;
+    optional uint64 write_bio_front_merges = 6;
 
-    optional uint64 write_lt_4kb = 18;
-    optional uint64 write_4kb = 19;
-    optional uint64 write_8kb = 20;
-    optional uint64 write_16kb = 21;
-    optional uint64 write_32kb = 22;
-    optional uint64 write_64kb = 23;
-    optional uint64 write_128kb = 24;
-    optional uint64 write_256kb = 25;
-    optional uint64 write_512kb = 26;
-    optional uint64 write_1mb = 27;
-    optional uint64 write_2mb = 28;
-    optional uint64 write_4mb = 29;
-    optional uint64 write_8mb = 30;
-    optional uint64 write_gt_8mb = 31;
-    optional uint64 write_unaligned = 32;
+    optional uint64 read_lt_4kb = 7;
+    optional uint64 read_4kb = 8;
+    optional uint64 read_8kb = 9;
+    optional uint64 read_16kb = 10;
+    optional uint64 read_32kb       = 11;
+    optional uint64 read_64kb       = 12;
+    optional uint64 read_128kb      = 13;
+    optional uint64 read_256kb      = 14;
+    optional uint64 read_512kb      = 15;
+    optional uint64 read_1mb        = 16;
+    optional uint64 read_2mb        = 17;
+    optional uint64 read_4mb        = 18;
+    optional uint64 read_8mb        = 19;
+    optional uint64 read_gt_8mb     = 20;
+    optional uint64 read_unaligned  = 21;
 
-    optional uint64 read_bios = 33;
-    optional uint64 write_bios = 34;
+    optional uint64 write_lt_4kb    = 22;
+    optional uint64 write_4kb       = 23;
+    optional uint64 write_8kb       = 24;
+    optional uint64 write_16kb      = 25;
+    optional uint64 write_32kb      = 26;
+    optional uint64 write_64kb      = 27;
+    optional uint64 write_128kb     = 28;
+    optional uint64 write_256kb     = 29;
+    optional uint64 write_512kb     = 30;
+    optional uint64 write_1mb       = 31;
+    optional uint64 write_2mb       = 32;
+    optional uint64 write_4mb       = 33;
+    optional uint64 write_8mb       = 34;
+    optional uint64 write_gt_8mb    = 35;
+    optional uint64 write_unaligned = 36;
+    optional uint64 read_bios       = 37;
+    optional uint64 write_bios      = 38;
 
-    optional uint64 read_lt_4kb_range = 35;
-    optional uint64 read_4kto8k_range = 36;
-    optional uint64 read_8kto16k_range = 37;
-    optional uint64 read_16kto32k_range = 38;
-    optional uint64 read_32kto64k_range = 39;
-    optional uint64 read_64kto128k_range = 40;
-    optional uint64 read_128kto256k_range = 41;
-    optional uint64 read_256kto512k_range = 42;
-    optional uint64 read_512kto1m_range = 43;
-    optional uint64 read_1mto2m_range = 44;
-    optional uint64 read_2mto4m_range = 45;
-    optional uint64 read_4mto8m_range = 46;
+    optional uint64 read_lt_4kb_range       = 39;
+    optional uint64 read_4kto8k_range      = 40;
+    optional uint64 read_8kto16k_range     = 41;
+    optional uint64 read_16kto32k_range    = 42;
+    optional uint64 read_32kto64k_range    = 43;
+    optional uint64 read_64kto128k_range   = 44;
+    optional uint64 read_128kto256k_range  = 45;
+    optional uint64 read_256kto512k_range  = 46;
+    optional uint64 read_512kto1m_range    = 47;
+    optional uint64 read_1mto2m_range      = 48;
+    optional uint64 read_2mto4m_range      = 49;
+    optional uint64 read_4mto8m_range      = 50;
 
-    optional uint64 write_lt_4kb_range = 47;
-    optional uint64 write_4kto8k_range = 48;
-    optional uint64 write_8kto16k_range = 49;
-    optional uint64 write_16kto32k_range = 50;
-    optional uint64 write_32kto64k_range = 51;
-    optional uint64 write_64kto128k_range = 52;
-    optional uint64 write_128kto256k_range = 53;
-    optional uint64 write_256kto512k_range = 54;
-    optional uint64 write_512kto1m_range = 55;
-    optional uint64 write_1mto2m_range = 56;
-    optional uint64 write_2mto4m_range = 57;
-    optional uint64 write_4mto8m_range = 58;
+    optional uint64 write_lt_4kb_range      = 51;
+    optional uint64 write_4kto8k_range     = 52;
+    optional uint64 write_8kto16k_range    = 53;
+    optional uint64 write_16kto32k_range   = 54;
+    optional uint64 write_32kto64k_range   = 55;
+    optional uint64 write_64kto128k_range  = 56;
+    optional uint64 write_128kto256k_range = 57;
+    optional uint64 write_256kto512k_range = 58;
+    optional uint64 write_512kto1m_range   = 59;
+    optional uint64 write_1mto2m_range     = 60;
+    optional uint64 write_2mto4m_range     = 61;
+    optional uint64 write_4mto8m_range     = 62;
 
-    optional uint64 total_read_ios = 59;
-    optional uint64 total_write_ios = 60;
+    optional uint64 total_read_ios  = 63;
+    optional uint64 total_write_ios = 64;
 
-    optional uint64 cumulative_read_io_size_bytes = 61;
-    optional uint64 cumulative_write_io_size_bytes = 62;
-}
+    optional uint64 cumulative_read_io_size_bytes  = 65;
+    optional uint64 cumulative_write_io_size_bytes = 66;
 
-message StatLog {
-    GenericFormat generic_format = 1;
-    Payload payload = 2;
-}
+    BiOpfFlags read_io_flags  = 67;
+    BiOpfFlags write_io_flags = 68;
 
-message StatLogs {
-    repeated StatLog stats_log = 1;
-}
+    optional uint64 read_device_time_ns        = 69;
+    optional uint64 write_device_time_ns       = 70;
+    optional uint64 read_block_driver_time_ns  = 71;
+    optional uint64 write_block_driver_time_ns = 72;
+
+    LatencyBuckets read_device_latency  = 89;
+    LatencyBuckets write_device_latency = 90;
+    LatencyBuckets read_driver_latency  = 91;
+    LatencyBuckets write_driver_latency = 92;
+    }
+
+    message LatencyBuckets {
+        optional uint64 latency_lh_opt1             = 1;
+        optional uint64 latency_bw_opt1_and_opt2    = 2;
+        optional uint64 latency_bw_opt2_and_opt3    = 3;
+        optional uint64 latency_bw_opt3_and_opt4    = 4;
+        optional uint64 latency_bw_opt4_and_opt5    = 5;
+        optional uint64 latency_bw_opt5_and_opt6    = 6;
+        optional uint64 latency_bw_opt6_and_opt7    = 7;
+        optional uint64 latency_bw_opt7_and_opt8    = 8;
+        optional uint64 latency_bw_opt8_and_opt9    = 9;
+        optional uint64 latency_bw_opt9_and_opt10   = 10;
+        optional uint64 latency_bw_opt10_and_opt11  = 11;
+        optional uint64 latency_bw_opt11_and_opt12  = 12;
+        optional uint64 latency_bw_opt12_and_opt13  = 13;
+        optional uint64 latency_bw_opt13_and_opt14  = 14;
+        optional uint64 latency_bw_opt14_and_opt15  = 15;
+        optional uint64 latency_bw_opt15_and_opt16  = 16;
+        optional uint64 latency_overflow            = 17;
+    }
+
+    message StatLog {
+        GenericFormat generic_format = 1;
+        Payload payload = 2;
+    }
+
+    message StatLogs {
+        repeated StatLog stats_log = 1;
+    }
