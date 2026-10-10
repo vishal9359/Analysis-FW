@@ -15,7 +15,7 @@ SQL and FIO — but nothing about this design.
 
 This document covers only the new **analysis system**. The existing loader, which
 puts profiling data into ClickHouse, is described in [architecture.md](architecture.md)
-and does not change. Earlier drafts of this document are kept in [_history/](_history/).
+and does not change. Earlier drafts of this document are in the git history.
 
 ---
 

@@ -17,6 +17,7 @@ runtime**. Full charter: [docs/overview.md](docs/overview.md).
 
 ```
 CLAUDE.md                     ← you are here: entry index + working rules
+AGENTS.md                     ← pointer here, for Codex and other AI agents
 README.md                     ← developer quickstart (install, run, test)
 docs/
 ├── overview.md               ← charter: what/why, sub-frameworks, ownership, data shape
@@ -25,13 +26,11 @@ docs/
 ├── goals-and-requirements.md ← goals + requirements (DRAFT): Phase 1 = plain-language
 │                             request to Grafana graph; Phase 2+ = automated reports
 ├── phase1-tool-research.md   ← open-source tool comparison for Phase 1 (+ sources)
-├── goals-and-requirements_codex.md ← earlier 5-goal requirements draft (superseded)
 ├── Profile-code-flow.md      ← how Profile FW works: eBPF → maps → Go collectors → .pb
 ├── Tracepoints-details.md    ← every tracepoint / kprobe / sysfs source, per collector
 ├── analysis-architecture.md   ← high-level architecture of the Phase 2 report system
 │                             (DRAFT): 6 parts, 6 steps, 2 diagrams
 ├── diagrams/                  ← architecture + workflow SVGs
-├── _history/                  ← superseded drafts, kept for provenance
 ├── glossary.md               ← domain terms (IO stack, eBPF, ids, DB, .pb format, streaming)
 ├── design.md                 ← MVP loader design detail
 ├── block-metrics.md          ← IOPS / bandwidth / latency query recipes
@@ -80,10 +79,13 @@ where it and an ADR disagree, the ADR wins.
   `test_nvme_children_detected` predates `lba_ranges` in the nvme_1 proto and needs
   updating (the loader's behaviour is correct).
 - **Next:** Phase 1 — plain-language request → Grafana graph
-  ([docs/goals-and-requirements.md](docs/goals-and-requirements.md)). First run
-  `tools/check_phase1_env.py` on the office box, then the WrenAI trial
-  ([docs/phase1-tool-research.md](docs/phase1-tool-research.md)).
-  [docs/roadmap.md](docs/roadmap.md) predates this phase plan.
+  ([docs/goals-and-requirements.md](docs/goals-and-requirements.md)). The office-box
+  readiness check passed on 2026-10-10 — tool calling works (results:
+  [docs/phase1-tool-research.md](docs/phase1-tool-research.md) §7). Next is the
+  WrenAI trial (§6 there), drawing in Grafana, views in a separate database
+  `analysis_fw`. **Waiting on:** the team's latest `.proto` files; then prepare
+  the catalog for the three trial tables (format and open questions in §8) for the
+  team to review. [docs/roadmap.md](docs/roadmap.md) predates this phase plan.
 - **Deferred debt** (all tracked in ADRs): append-only reload, single-node
   `run_id`/`record_id`, schema auto-migrate.
 

@@ -57,10 +57,12 @@ Example requests:
   it**. Its configuration is provided when implementation starts.
 - **Grafana stays the drawing layer:** the latest Grafana container, with the
   ClickHouse plugin already installed, reached through its REST API or its MCP
-  server. **Graphs go into one Grafana folder per run.** The trial may first try
-  WrenAI's own chart generation (GenBI, local preview only) if the LLM API
-  supports tool calling; Grafana remains the Phase 1 target. See
+  server. **Graphs go into one Grafana folder per run.** The trial draws in Grafana
+  (decided 2026-10-10). WrenAI's own chart generation (GenBI) may be tried later,
+  using the team's own coding-agent API. See
   [phase1-tool-research.md](phase1-tool-research.md), section 4.
+- **Our ClickHouse objects live in a separate database, `analysis_fw`**, reading from
+  `profile_fw`, so the loader's database stays untouched.
 - **Licences:** Apache-2.0 and MIT are acceptable. AGPL has not been approved.
 - **Existing open-source or free tools are preferred** over building from
   scratch. See [phase1-tool-research.md](phase1-tool-research.md).

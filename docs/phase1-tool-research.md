@@ -94,10 +94,12 @@ the yes/no confirmation, the checks, and the explanation.
   HTTP API. It needs no tool calling, the LLM fills in small pieces that are easy
   to check, and Grafana is where Phase 1 graphs must end up anyway.
 
-**The tool-calling test decides.** If the LLM API handles tool calling well, try
-Path 1 first, as the team proposed; otherwise go straight to Path 2. Either way,
-the main question of the trial — does WrenAI plus our LLM produce correct SQL
-from our descriptions? — is the same, and that work carries over unchanged.
+**Decided (2026-10-10): the trial uses Path 2, Grafana.** Tool calling works
+(section 7), so Path 1 is possible, but it is not the shorter path: it needs a
+coding agent that sends the gateway's custom headers, and the model would write a
+web app for every request. Path 1 may be tried later with the team's own
+coding-agent API. Either way, the main question of the trial — does WrenAI plus
+our LLM produce correct SQL from our descriptions? — is the same.
 
 **Our own thin program** — `request.yaml` → plain-words interpretation → yes/no
 → query → checks → run → graph → explanation. No tool covers this flow, and it is
@@ -133,13 +135,13 @@ makes the semantic-layer approach possible.
    `phase1_check_report.json`.
 2. Install `wrenai[clickhouse]` and point it at `profile_fw`.
 3. Create per-interval views for `linux_block_1_stats`, `linux_block_2_misc` and
-   `linux_nvme_1_stats`.
-4. Describe those tables in our catalog format; generate the WrenAI model files
-   from it.
+   `linux_nvme_1_stats`, in a separate database `analysis_fw`.
+4. Describe those tables in our catalog format (section 8); generate the WrenAI
+   model files from it. **Waits for the team's latest `.proto` files**; the team
+   then reviews the descriptions.
 5. Run the five example requests, plus five of the existing Grafana graphs
-   described in plain language, through LLM → WrenAI → `dry-plan` → graph:
-   a local GenBI preview (Path 1) or a Grafana panel in a folder named after the
-   run (Path 2).
+   described in plain language, through LLM → WrenAI → `dry-plan` → a Grafana
+   panel in a folder named after the run.
 6. Compare each result with the existing hand-built panel.
 
 **Decide at the end:** keep WrenAI, or switch to Cube Core.
@@ -147,6 +149,61 @@ makes the semantic-layer approach possible.
 **Needed before the trial:** the LLM API configuration, a Grafana service-account
 token, and the existing dashboards exported as JSON — see the Phase 1 open points
 in [goals-and-requirements.md](goals-and-requirements.md).
+
+## 7. Readiness check results (office box, 2026-10-10)
+
+Step 1 of the trial plan is done. Everything the trial depends on works.
+
+| Area | Result | What it means |
+|---|---|---|
+| **Tool calling** | Works: one call and its result, a forced call, two calls at once, a multi-step text-to-SQL loop, and a whole HTML file in one call | Both graph paths in section 4 are possible |
+| **Correct SQL** | Given our column descriptions, the model followed the running-total rule; its query, run on the real ClickHouse, gave the same total as an independent calculation | First real evidence for the "predefined meanings" approach — one simple question only; the trial's test set is the real test |
+| **Speed** | A plain answer in 0.4 s; a 16,000-token prompt in 2.5 s; every call within the configured 10-second timeout | The model is fast; no reasoning ("thinking") overhead |
+| **Context** | A 16,000-token prompt was not cut | Larger sizes not yet tested (`--context-test`) |
+| **Gateway** | Only the `/chat/completions` route exists; `/models` returns "no Route matched" | Nothing here may rely on `/models` — or, probably, `/embeddings`. WrenAI itself does not call the LLM, so this does not affect it; its optional memory index would need a local embedding model |
+| **ClickHouse, Grafana** | All checks passed | — |
+| **Machine** | WrenAI installed. Python's `requests` cannot verify external HTTPS certificates (`CERTIFICATE_VERIFY_FAILED`), although pip works | The company network re-signs HTTPS traffic with its own certificate, which `requests`' bundled certificates do not include. Point `REQUESTS_CA_BUNDLE` at the system certificate bundle. The LLM gateway uses plain HTTP and is unaffected |
+
+## 8. The catalog: agreed format and open questions (input for trial step 4)
+
+**Format (agreed in discussion, not yet built).**
+
+- One YAML file per collector (one per `.proto`), plus one for the columns every
+  table shares (`run_id`, `ts`, `record_id`, `timestamp`, `hostname`,
+  `component`, `tag`, `log_level`, `_loaded_at`).
+- **Generate the files from the loader's own schema code**
+  (`src.registry.build_schema`), never by hand. That guarantees the exact
+  column names ClickHouse holds: flattened names such as `io_flags_direct`, and
+  child tables such as `linux_nvme_1_stats_per_queue`.
+- Each column has: `meaning`, `unit`, `kind` (counter · gauge · interval ·
+  dimension · label · timestamp), enum `values` where relevant, `status`, and an
+  optional `basis` (where the description came from) and `note`.
+- `status`: **todo** (something missing) · **draft** (pre-filled from documents
+  or standard interfaces — needs review) · **confirmed** (checked by an engineer).
+- Repeating families — size buckets, unaligned ranges, I/O flags — are described
+  once as a **group**, so the team reviews a handful of entries, not ~335.
+- Each file starts with collector-level facts (source, counts since, sampling,
+  device filter, what it can and cannot observe) and a **questions** list.
+- Safe to pre-fill: `linux_block_1_stats` from the kernel's
+  `Documentation/block/stat.rst`; `linux_ssd_1_stats` from the NVMe SMART / Health
+  log (watch the units: data units are 512,000 bytes, and temperature is in Kelvin).
+
+**Open questions for the three trial tables** — re-check them against the latest
+protos; the answers decide how the data checks are written.
+
+- `linux_block_1_stats`: which `/sys/block/<dev>/stat` fields are
+  `device_busy_time` and `io_time`? Is `device` the namespace (`nvme3n1`) or the
+  controller (`nvme3`)?
+- `linux_block_2_misc`: how do `total_read_ios` and `read_bios` differ (is total =
+  bios + splits)? Are sizes counted when a bio is submitted, or after splitting?
+  Is `read_unaligned` the sum of the `read_*_range` columns? Which total should
+  the buckets add up to? What goes in `read_lt_4kb` versus `read_lt_4kb_range`?
+  Are sizes powers of two? Where does a bio larger than 8 MiB go?
+- `linux_nvme_1_stats`: is `read_kbs` in KB or KiB? What interval does
+  `read_nvme_driver_time_ns` measure? Is `queue_id` 0 the admin queue? Is
+  `cpu_id` the submitting or the completing CPU? Are `lba_ranges` bounds in LBAs,
+  bytes or GB, and is the end included? Must per-queue, per-core and per-range
+  counts add up exactly to the totals?
 
 ## Sources
 
