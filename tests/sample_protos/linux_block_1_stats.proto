@@ -1,5 +1,8 @@
 syntax = "proto3";
 
+package blk_device_stats;
+option go_package = "linux_tracer/proto;main";
+
 message GenericFormat {
     optional string timestamp = 1;
     optional string hostname = 2;
@@ -11,26 +14,26 @@ message GenericFormat {
 message Payload {
     optional string device = 1;
 
-    optional uint64 read_ios = 2;
-    optional uint64 reads_merged = 3;
-    optional uint64 sectors_read = 4;
+    optional uint64 read_io_count = 2;
+    optional uint64 reads_merged_count = 3;
+    optional uint64 read_sectors_512b = 4;
     optional uint64 read_time_ms = 5;
 
-    optional uint64 write_ios = 6;
-    optional uint64 writes_merged = 7;
-    optional uint64 sectors_written = 8;
+    optional uint64 write_io_count = 6;
+    optional uint64 writes_merged_count = 7;
+    optional uint64 write_sectors_512b = 8;
     optional uint64 write_time_ms = 9;
 
-    optional uint64 in_flight_ios = 10;
-    optional uint64 device_busy_time = 11;
-    optional uint64 io_time = 12;
+    optional uint64 in_flight_io_count = 10;
+    optional uint64 device_busy_time_ms = 11;
+    optional uint64 io_time_ms = 12;
 
-    optional uint64 discard_ios = 13;
-    optional uint64 discards_merged = 14;
-    optional uint64 sectors_discarded = 15;
+    optional uint64 discard_io_count = 13;
+    optional uint64 discards_merged_count = 14;
+    optional uint64 discard_sectors_512b = 15;
     optional uint64 discard_time_ms = 16;
 
-    optional uint64 flush_ios = 17;
+    optional uint64 flush_io_count = 17;
     optional uint64 flush_time_ms = 18;
 }
 
@@ -40,5 +43,5 @@ message StatLog {
 }
 
 message StatLogs {
-    repeated StatLog stat_logs = 1;
+    repeated StatLog stats_log = 1;
 }
