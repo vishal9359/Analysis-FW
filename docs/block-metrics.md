@@ -150,3 +150,82 @@ ORDER BY time
 `tests/make_fixture.py` generates a per-second time series with monotonic
 counters, so these queries work end-to-end without waiting for real profiling —
 see the README's "Generate simulated data" section.
+
+## Latency buckets — labelling the counts
+
+`linux_block_2_misc` stores latency distributions as counts per bucket, flattened from
+the proto's `LatencyBuckets` sub-messages (see
+[ADR-0010](decisions/0010-payload-field-shapes-to-tables.md)):
+
+```
+read_device_latency_latency_lh_opt1            IOs faster than threshold 1
+read_device_latency_latency_bw_opt1_and_opt2   IOs between thresholds 1 and 2
+...
+read_device_latency_latency_bw_opt15_and_opt16
+read_device_latency_latency_overflow           IOs slower than the last threshold
+```
+
+The columns say *which* bucket, never *what range* — the operator chooses that per run
+with `-lat-buckets`. The ranges live in the `latency_buckets` table
+([ADR-0011](decisions/0011-run-level-config-sidecars.md)):
+
+```sql
+SELECT option_index, threshold_us
+FROM latency_buckets
+WHERE run_id = {run:String}
+ORDER BY option_index;
+-- 1 → 1    2 → 10    3 → 100    4 → 1000     (microseconds)
+```
+
+**n thresholds describe n+1 ranges.** Four thresholds give `<1`, `1–10`, `10–100`,
+`100–1000`, `>1000` µs.
+
+### Human-readable ranges for a run
+
+Build the labels from the thresholds, so the same query works whatever `-lat-buckets`
+the run used. `DISTINCT` guards against the duplicate rows an append-only re-load
+leaves behind ([ADR-0006](decisions/0006-mvp-append-only-ingest.md)):
+
+```sql
+WITH t AS (
+    SELECT DISTINCT option_index, threshold_us
+    FROM latency_buckets
+    WHERE run_id = {run:String}
+)
+SELECT
+    option_index                                            AS bucket,
+    concat('latency_bw_opt', toString(option_index),
+           '_and_opt', toString(option_index + 1))           AS column_name,
+    concat(toString(threshold_us), '-',
+           toString(anyIf(threshold_us,
+                          option_index = t.option_index + 1)), ' us') AS range_label
+FROM t
+ORDER BY bucket;
+```
+
+In practice it is simpler to read the thresholds once (they are 4–16 rows) and build the
+labels in the dashboard or the calling code, rather than in SQL.
+
+### Bucket counts as a distribution
+
+The bucket columns are **cumulative counters**, like everything else in these layers, so
+take the per-second delta before charting. For one bucket:
+
+```sql
+SELECT
+    ts,
+    greatest(0, toInt64(read_device_latency_latency_bw_opt2_and_opt3)
+              - toInt64(lagInFrame(toInt64(read_device_latency_latency_bw_opt2_and_opt3))
+                        OVER (PARTITION BY run_id, hostname ORDER BY ts))) AS ios_10_to_100us
+FROM linux_block_2_misc
+WHERE run_id = {run:String}
+ORDER BY ts;
+```
+
+For a Grafana heatmap, emit one series per bucket column and label each series from the
+`latency_buckets` thresholds.
+
+> **Comparing runs:** two runs profiled with different `-lat-buckets` values have
+> different ranges behind identically-named columns. Always join through
+> `latency_buckets` on `run_id`; never compare `..._bw_opt2_and_opt3` across runs
+> without checking the thresholds match.

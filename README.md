@@ -181,6 +181,54 @@ linux_nvme_2_lbarandomness_per_core_seq_random_entries
 > disambiguate across records). Producers must emit an ordering key on every leaf
 > element. See [ADR-0010](docs/decisions/0010-payload-field-shapes-to-tables.md).
 
+## Run-level config sidecars
+
+Some properties belong to the **run**, not to a record, and the profiler emits them as
+a file next to the data rather than inside the `.pb`. The loader reads these once per
+run and writes them to their own table, keyed by `run_id`.
+
+**Latency buckets.** The operator chooses the thresholds at profiling time:
+
+```bash
+./bin/profile_fw -tag baseline -i 1 -d 1500 -dev nvme1 -lat-buckets 1,10,100,1000
+```
+
+and the profiler writes `latency_bucket_options.yaml` into the workload folder:
+
+```yaml
+latency_bucket_thresholds_us:
+  lat_option_us_1: 1
+  lat_option_us_2: 10
+  lat_option_us_3: 100
+  lat_option_us_4: 1000
+```
+
+If that file is present (in the run directory or its `Config/`), the loader creates
+`latency_buckets` and writes one row per threshold:
+
+| run_id | option_index | threshold_us | _loaded_at |
+|---|---|---|---|
+| ProfileData-… | 1 | 1 | … |
+| ProfileData-… | 2 | 10 | … |
+| ProfileData-… | 3 | 100 | … |
+| ProfileData-… | 4 | 1000 | … |
+
+**Why it has to be stored.** The measurements land in the layer table as counts —
+`read_device_latency_latency_bw_opt2_and_opt3` means "IOs between the 2nd and 3rd
+threshold", which is 10–100 µs *for this run only*. The thresholds are in neither the
+`.pb` nor the `.proto`, so without this table the bucket columns can never be labelled,
+and two runs profiled with different `-lat-buckets` would silently compare different
+ranges. Labelling queries: [docs/block-metrics.md](docs/block-metrics.md).
+
+**n thresholds describe n+1 ranges** — `1,10,100,1000` gives `<1`, `1–10`, `10–100`,
+`100–1000`, `>1000`. The table stores the 4 boundaries.
+
+`-lat-buckets` is optional, so **no file is normal** and simply produces no table. A
+file that *is* present but malformed **fails the load** — storing counts that can never
+be interpreted is worse than stopping. Checked: indices contiguous from 1, thresholds
+strictly increasing, values whole and non-negative. See
+[ADR-0011](docs/decisions/0011-run-level-config-sidecars.md).
+
 ## Configuration
 
 Config lives at `config/config.yaml` (repo root), separate from the code so an

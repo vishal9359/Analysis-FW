@@ -97,7 +97,11 @@ def test_detects_record_generic_payload_wrapper():
     s = _schema(BLOCK1)
     assert s.record_cls.DESCRIPTOR.name == "StatLog"
     assert s.wrapper_cls.DESCRIPTOR.name == "StatLogs"
-    assert s.repeated_field == "stat_logs"
+    # detection is by structure, not by name: assert the field was found and
+    # really is the wrapper's repeated record list, never its exact spelling
+    # (producers have shipped both "stat_logs" and "stats_log").
+    rf = s.wrapper_cls.DESCRIPTOR.fields_by_name[s.repeated_field]
+    assert rf.is_repeated and rf.message_type is s.record_cls.DESCRIPTOR
     assert s.generic_field == "generic_format"
     assert s.payload_field == "payload"
 
@@ -140,7 +144,12 @@ def test_nvme_children_detected():
     assert s.has_record_id is True
     assert "record_id" in [c.name for c in s.columns]
     kids = {c.table: c for c in s.children}
-    assert set(kids) == {f"{NVME}_per_queue", f"{NVME}_per_core"}
+    # one child per repeated payload field; assert the two this test is about,
+    # so the producer adding another repeated field doesn't fail the test
+    assert {f"{NVME}_per_queue", f"{NVME}_per_core"} <= set(kids)
+    assert len(kids) == sum(
+        1 for f in s.record_cls.DESCRIPTOR.fields_by_name[s.payload_field]
+        .message_type.fields if f.is_repeated)
 
     q = kids[f"{NVME}_per_queue"]
     assert q.repeated_field == "per_queue"
@@ -541,3 +550,106 @@ def test_fixture_measurement_windows_are_real_intervals():
     # non-overlapping within the group
     assert all(a["end_time"] <= b["start_time"]
                for a, b in zip(group, group[1:]))
+
+
+# ---- run-level config: latency bucket thresholds --------------------------
+
+from src import runconfig  # noqa: E402
+
+_LAT_YAML = """# a comment
+#
+
+latency_bucket_thresholds_us:
+  lat_option_us_1: 1
+  lat_option_us_2: 10
+  lat_option_us_3: 100
+  lat_option_us_4: 1000
+"""
+
+
+def _run_with_yaml(tmp: Path, text: str | None, where: str = ".") -> Path:
+    """A minimal run directory, optionally carrying a thresholds file."""
+    run = tmp / "ProfileData-lat-20260727-180221"
+    d = run / "Linux" / "Block"
+    d.mkdir(parents=True, exist_ok=True)
+    u = _units()[BLOCK1]
+    (d / f"{BLOCK1}.proto").write_text(u.proto_path.read_text())
+    (d / f"{BLOCK1}.pb").write_bytes(u.pb_parts[0].read_bytes())
+    if text is not None:
+        target = run / where / runconfig.FILENAME
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    return run
+
+
+def test_latency_buckets_absent_is_not_an_error():
+    """-lat-buckets is optional, so no file is the normal case: no table, no
+    complaint."""
+    with tempfile.TemporaryDirectory() as td:
+        run = _run_with_yaml(Path(td), None)
+        assert runconfig.read_thresholds(run) == []
+
+        store = MemoryStore(); store.connect()
+        report = run_load(run, _cfg(), store)
+        assert report.latency_buckets == 0
+        assert runconfig.TABLE not in store.tables
+
+
+@pytest.mark.parametrize("where", [".", "Config"])
+def test_latency_buckets_loaded_into_their_own_table(where):
+    """The thresholds are run-level config, so one row per option keyed by
+    run_id — found in the workload folder or in Config/."""
+    with tempfile.TemporaryDirectory() as td:
+        run = _run_with_yaml(Path(td), _LAT_YAML, where)
+        assert runconfig.read_thresholds(run) == [(1, 1), (2, 10), (3, 100),
+                                                  (4, 1000)]
+
+        store = MemoryStore(); store.connect()
+        report = run_load(run, _cfg(), store)
+
+        assert report.latency_buckets == 4
+        cols = [c.name for c in store.columns[runconfig.TABLE]]
+        assert cols == ["run_id", "option_index", "threshold_us", "_loaded_at"]
+        assert store.order_by[runconfig.TABLE] == ["run_id", "option_index"]
+
+        rows = [dict(zip(cols, r)) for r in store.tables[runconfig.TABLE]]
+        assert [(r["option_index"], r["threshold_us"]) for r in rows] == \
+               [(1, 1), (2, 10), (3, 100), (4, 1000)]
+        assert {r["run_id"] for r in rows} == {run.name}
+
+        # the thresholds are config, not measurements: they must not be counted
+        # as loaded data rows
+        assert report.rows == sum(u.total_rows for u in report.units)
+
+
+def test_latency_buckets_n_thresholds_give_n_plus_1_buckets():
+    """4 thresholds describe 5 ranges: <1, 1-10, 10-100, 100-1000, >1000. The
+    table stores the 4 boundaries; the 5th range is the overflow bucket."""
+    with tempfile.TemporaryDirectory() as td:
+        run = _run_with_yaml(Path(td), _LAT_YAML)
+        got = runconfig.read_thresholds(run)
+    assert len(got) == 4
+    assert len(got) + 1 == 5
+
+
+@pytest.mark.parametrize("body,match", [
+    ("latency_bucket_thresholds_us:\n  lat_option_us_1: 1\n"
+     "  lat_option_us_3: 100\n", "no gaps"),
+    ("latency_bucket_thresholds_us:\n  lat_option_us_1: 100\n"
+     "  lat_option_us_2: 10\n", "strictly increase"),
+    ("latency_bucket_thresholds_us:\n  lat_option_us_1: 1\n"
+     "  lat_option_us_2: 1\n", "strictly increase"),
+    ("latency_bucket_thresholds_us:\n  lat_option_us_1: fast\n", "whole number"),
+    ("latency_bucket_thresholds_us:\n  lat_opt_1: 1\n", "unexpected key"),
+    ("latency_bucket_thresholds_us:\n", "missing|no thresholds|must be a mapping"),
+    ("other_section:\n  a: 1\n", "missing"),
+    ("just a string\n", "mapping at the top level"),
+])
+def test_latency_buckets_rejects_untrustworthy_file(body, match):
+    """A thresholds file that exists but can't be trusted fails the load. The
+    bucket counts would otherwise be stored with no way to say what they
+    counted, and nothing downstream could detect it."""
+    with tempfile.TemporaryDirectory() as td:
+        run = _run_with_yaml(Path(td), body)
+        with pytest.raises(InputError, match=match):
+            runconfig.read_thresholds(run)

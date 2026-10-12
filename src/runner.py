@@ -20,6 +20,7 @@ from .config import Config
 from .discover import Unit, discover
 from .errors import AnalysisFWError, DatabaseError, ExitCode, InputError
 from .registry import build_schema, build_schema_from_descriptor
+from . import runconfig
 from .store.clickhouse import ClickHouseStore
 from .store.base import Store
 from .worker import UnitResult, load_unit
@@ -32,6 +33,7 @@ class LoadReport:
     database: str
     units: list[UnitResult] = field(default_factory=list)
     status: str = "complete"
+    latency_buckets: int = 0        # threshold rows written (0 = run had no file)
 
     @property
     def records(self) -> int:
@@ -48,7 +50,8 @@ class LoadReport:
             "producer": self.producer,
             "database": self.database,
             "totals": {"records": self.records, "rows": self.rows,
-                       "units": len(self.units)},
+                       "units": len(self.units),
+                       "latency_buckets": self.latency_buckets},
             "units": [
                 {"stem": u.stem, "files": u.files, "records": u.records,
                  "tables": u.table_rows, "ok": u.ok}
@@ -94,6 +97,23 @@ def _run_job(job: _Job) -> UnitResult:
 # orchestration
 # --------------------------------------------------------------------------
 
+def _write_latency_buckets(input_dir: Path, run_id: str, st: Store) -> int:
+    """Store the run's latency-bucket thresholds, if the profiler emitted them.
+
+    This is run-level config, not measurements: it is read once per run and
+    written once, whatever the worker mode. Returns the row count (0 when the
+    run was profiled without `-lat-buckets`).
+    """
+    thresholds = runconfig.read_thresholds(input_dir)
+    if not thresholds:
+        return 0
+    st.ensure_table(runconfig.TABLE, runconfig.COLUMNS, runconfig.ORDER_BY)
+    loaded_at = datetime.now().replace(microsecond=0)
+    st.insert(runconfig.TABLE, [c.name for c in runconfig.COLUMNS],
+              [(run_id, idx, us, loaded_at) for idx, us in thresholds])
+    return len(thresholds)
+
+
 def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadReport:
     """Discover and load a run. If `store` is given, run sequentially against it
     (used by tests). Otherwise use ClickHouse with the configured worker pool."""
@@ -112,6 +132,7 @@ def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadRe
         if own:
             st.connect()
         try:
+            report.latency_buckets = _write_latency_buckets(input_dir, run_id, st)
             for u in units:
                 report.units.append(
                     load_unit(u.pb_parts, schemas[u.stem], st, run_id,
@@ -131,6 +152,16 @@ def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadRe
              async_insert=cfg.store.async_insert)
         for u in units
     ]
+    # run-level config is the parent's job: each child only knows its own unit,
+    # and this must be written exactly once per run.
+    st = ClickHouseStore(cfg.store.host, cfg.store.port, cfg.store.database,
+                         cfg.store.async_insert)
+    st.connect()
+    try:
+        report.latency_buckets = _write_latency_buckets(input_dir, run_id, st)
+    finally:
+        st.close()
+
     workers = min(cfg.store.workers, len(jobs))
     with cf.ProcessPoolExecutor(max_workers=workers) as ex:
         for res in ex.map(_run_job, jobs):

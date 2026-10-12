@@ -11,7 +11,7 @@ message GenericFormat {
     optional uint32 log_level = 5;
 }
 
-message BioOpFlags {
+message BiOpFlags {
     optional uint64 req_fail_fast_dev = 1;
     optional uint64 req_fail_fast_transport = 2;
     optional uint64 req_fail_fast_driver = 3;
@@ -110,8 +110,8 @@ message Payload {
     optional uint64 cumulative_read_io_size_bytes  = 65;
     optional uint64 cumulative_write_io_size_bytes = 66;
 
-    BiOpfFlags read_io_flags  = 67;
-    BiOpfFlags write_io_flags = 68;
+    BiOpFlags read_io_flags  = 67;
+    BiOpFlags write_io_flags = 68;
 
     optional uint64 read_device_time_ns        = 69;
     optional uint64 write_device_time_ns       = 70;

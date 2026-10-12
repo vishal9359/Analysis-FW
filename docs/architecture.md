@@ -40,12 +40,17 @@ Pipeline (each stage a module under `src/`; full code map is in the
 
 ```
 discover → registry → reader → worker → store
+                      runconfig (once per run) ↗
 ```
 - **discover** — walk the run dir, pair each `<stem>.proto` with its `.pb` part(s).
 - **registry** — compile the `.proto` at runtime → derive ClickHouse table(s)+columns.
 - **reader** — parse each `.pb` (one wrapper message), iterate records.
 - **worker** — flatten a record → row(s): scalars and 1:1 groups → main table,
   repeated → child tables (leaf rows carry their group's scalars).
+- **runconfig** — read the run's sidecar config files (today
+  `latency_bucket_options.yaml`) once per run → their own `run_id`-keyed tables. Run
+  properties, not measurements; see
+  [decisions/0011-run-level-config-sidecars.md](decisions/0011-run-level-config-sidecars.md).
 - **store** — create tables if absent; batched INSERT (ClickHouse; in-memory for tests).
 
 Design rationale is in [design.md](design.md); the block-metric queries in

@@ -46,6 +46,21 @@ BASE_TIME = datetime(2026, 7, 27, 18, 2, 21, tzinfo=timezone.utc)
 HOSTNAME = "spark-e97e"
 TAG = "test1"
 
+# What the profiler writes for `-lat-buckets 1,10,100,1000`. n thresholds give
+# n+1 buckets: < 1, 1-10, 10-100, 100-1000, > 1000.
+LATENCY_BUCKETS_FILE = "latency_bucket_options.yaml"
+LATENCY_BUCKETS_US = [1, 10, 100, 1000]
+LATENCY_BUCKETS_YAML = "\n".join([
+    "# Latency bucket thresholds, in microseconds.",
+    "# Written by profile_fw from the -lat-buckets argument.",
+    "#",
+    "",
+    "latency_bucket_thresholds_us:",
+    *(f"  lat_option_us_{i}: {us}"
+      for i, us in enumerate(LATENCY_BUCKETS_US, start=1)),
+    "",
+])
+
 # Per-second increments for known /proc/diskstats counters, chosen so the
 # derived metrics are realistic: ~2 ms/read, ~3 ms/write, ~8 sectors (4 KiB)/IO.
 _COUNTER_STEP = {
@@ -238,6 +253,7 @@ def main() -> None:
     run_dir = args.output_root / "ProfileData-fixture-20260727-180221"
     (run_dir / "Config").mkdir(parents=True, exist_ok=True)
     (run_dir / "Config" / "run_config.log").touch()
+    (run_dir / LATENCY_BUCKETS_FILE).write_text(LATENCY_BUCKETS_YAML)
 
     total = 0
     for proto in protos:

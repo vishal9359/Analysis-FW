@@ -39,9 +39,11 @@ docs/
 │   ├── README.md             ← ADR index + how to add one
 │   ├── 0001…0007-*.md        ← ClickHouse · runtime-schema · .pb-format · src-layout ·
 │   │                            id-stopgap · append-only · streaming-ladder
-│   └── 0010-payload-field-shapes-to-tables.md
-│                              ← how field shape decides the table (0008/0009 are
-│                                taken on the `query` / `go_version` branches)
+│   ├── 0010-payload-field-shapes-to-tables.md
+│   │                          ← how field shape decides the table (0008/0009 are
+│   │                            taken on the `query` / `go_version` branches)
+│   └── 0011-run-level-config-sidecars.md
+│                              ← run-level sidecar files → own tables (latency_buckets)
 └── reference/                ← imported snapshots from D:\Frameworks (SOURCE, not canonical)
     ├── README.md             ← index of everything below
     ├── requirements/         ← Frameworks.txt (source of truth), prod/module reqs,
@@ -75,9 +77,9 @@ where it and an ADR disagree, the ADR wins.
 
 ## Status (keep this current)
 
-- **Now:** Module 1 offline loader — **built, in good shape**. 29 of 30 tests pass:
-  `test_nvme_children_detected` predates `lba_ranges` in the nvme_1 proto and needs
-  updating (the loader's behaviour is correct).
+- **Now:** Module 1 offline loader — **built, 42 tests pass**, in good shape. The two
+  tests that lagged the updated protos (`lba_ranges`, the `stat_logs`→`stats_log`
+  rename) now assert loader *behaviour* instead of producer spellings.
 - **Next:** Phase 1 — plain-language request → Grafana graph
   ([docs/goals-and-requirements.md](docs/goals-and-requirements.md)). The office-box
   readiness check passed on 2026-10-10 — tool calling works (results:
@@ -111,6 +113,11 @@ where it and an ADR disagree, the ADR wins.
   with the outer level's scalars denormalized onto each row · repeated scalar →
   rejected. Add a shape by extending these rules, never by special-casing a field name.
   See [ADR-0010](docs/decisions/0010-payload-field-shapes-to-tables.md).
+- **Run-level config lives in `src/runconfig.py`:** a profiler sidecar file (today
+  `latency_bucket_options.yaml`) is read once per run and written to its own
+  `run_id`-keyed table, by `runner.run_load` — in *both* the sequential and pool paths.
+  A missing file is normal; a malformed one fails the load. See
+  [ADR-0011](docs/decisions/0011-run-level-config-sidecars.md).
 - **Ingest is append-only** (re-loading a run duplicates rows) — see
   [ADR-0006](docs/decisions/0006-mvp-append-only-ingest.md).
 - **Timestamps** stored as RFC 3339 UTC; the loader tolerates several formats and

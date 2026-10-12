@@ -86,6 +86,16 @@ block / blk-mq → NVMe driver → IRQ completion**.
   [decisions/0010-payload-field-shapes-to-tables.md](decisions/0010-payload-field-shapes-to-tables.md).
 - Detection is **by structure/field-name, not message name**.
 
+- **run-level config sidecar** — a property of the whole run, emitted by the profiler
+  as a file beside the data instead of inside the `.pb` (today:
+  `latency_bucket_options.yaml`). Read once per run into its own `run_id`-keyed table.
+  See [decisions/0011-run-level-config-sidecars.md](decisions/0011-run-level-config-sidecars.md).
+- **latency bucket** — a latency range the profiler counts IOs into. The operator picks
+  the boundaries with `-lat-buckets 1,10,100,1000`; **n thresholds give n+1 ranges**
+  (`<1`, `1-10`, `10-100`, `100-1000`, `>1000` us). Counts live in the layer table as
+  the proto's flattened `LatencyBuckets` columns; the boundaries live in the
+  `latency_buckets` table — the columns alone don't say what range they cover.
+
 ## Database / analysis (ClickHouse)
 
 - **ClickHouse** — the chosen columnar OLAP DB ([ADR-0001](decisions/0001-database-clickhouse.md)).

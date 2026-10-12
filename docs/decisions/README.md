@@ -15,6 +15,7 @@ history. This is how "why is it like this?" stays answerable as the project grow
 | [0006](0006-mvp-append-only-ingest.md) | MVP ingest is append-only | Accepted — revisit with the coordinator |
 | [0007](0007-streaming-transport-ladder.md) | Streaming transport ladder (Vector → gRPC gateway → Kafka) | Accepted direction — build in POC 2 |
 | [0010](0010-payload-field-shapes-to-tables.md) | Payload field shapes map to tables by structure (1:1 flatten · 1:N child · 1:N:M leaf) | Accepted |
+| [0011](0011-run-level-config-sidecars.md) | Run-level config sidecars become their own tables (`latency_buckets`) | Accepted |
 
 ## Adding an ADR
 
