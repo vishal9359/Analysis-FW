@@ -77,7 +77,7 @@ where it and an ADR disagree, the ADR wins.
 
 ## Status (keep this current)
 
-- **Now:** Module 1 offline loader — **built, 42 tests pass**, in good shape. The two
+- **Now:** Module 1 offline loader — **built, 46 tests pass**, in good shape. The two
   tests that lagged the updated protos (`lba_ranges`, the `stat_logs`→`stats_log`
   rename) now assert loader *behaviour* instead of producer spellings.
 - **Next:** Phase 1 — plain-language request → Grafana graph

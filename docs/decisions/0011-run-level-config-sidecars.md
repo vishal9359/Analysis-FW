@@ -1,6 +1,7 @@
 # 0011 — Run-level config sidecars become their own tables
 
-**Status:** Accepted.
+**Status:** Accepted. Amended 2026-10-12 — one row per *bucket* with a
+rendered `range` column, replacing one row per *threshold* (see Decision).
 
 ## Context
 
@@ -46,14 +47,27 @@ and validating these files; `runner.run_load` writes them once per run, in both 
 sequential and the process-pool path (the parent does it — a child only knows its own
 unit).
 
-For latency buckets: table `latency_buckets`, one row per threshold.
+For latency buckets: table `latency_buckets`, **one row per bucket** — *n* thresholds
+give *n+1* rows, including the open-ended ends.
 
 | column | type | meaning |
 |---|---|---|
 | `run_id` | String | the run directory name |
-| `option_index` | UInt16 | the *N* in `lat_option_us_N`, 1-based |
-| `threshold_us` | UInt64 | the threshold, microseconds |
+| `option_index` | UInt16 | the bucket's position, 0..*n* |
+| `range` | String | the range, rendered for a legend: `100 µs - 1 ms` |
+| `threshold_us` | UInt64 | the threshold opening the bucket; 0 for the two open ends |
 | `_loaded_at` | DateTime | ingest time |
+
+`option_index` lines up with the proto's positional bucket fields: 0 is
+`latency_lh_opt1`, *i* is `latency_bw_opt<i>_and_opt<i+1>`, *n* is `latency_overflow`.
+
+`range` exists because a raw microsecond threshold spends a chart legend badly —
+`50000000` says much less at a glance than `50 s`. `runconfig.format_us` renders a value
+in the largest unit that keeps its number small (µs → ms → s → min → h, trailing zeros
+trimmed), and a bucket whose bounds share a unit writes it once (`1-10 ms`) rather than
+twice. The two open-ended buckets carry `threshold_us = 0`: neither is named by a single
+threshold, and 0 marks them as the unbounded ends instead of implying a boundary — their
+bound is still readable in `range`.
 
 `ENGINE = MergeTree`, `PARTITION BY run_id`, `ORDER BY (run_id, option_index)` — the
 same shape as every other table.

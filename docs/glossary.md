@@ -91,10 +91,11 @@ block / blk-mq → NVMe driver → IRQ completion**.
   `latency_bucket_options.yaml`). Read once per run into its own `run_id`-keyed table.
   See [decisions/0011-run-level-config-sidecars.md](decisions/0011-run-level-config-sidecars.md).
 - **latency bucket** — a latency range the profiler counts IOs into. The operator picks
-  the boundaries with `-lat-buckets 1,10,100,1000`; **n thresholds give n+1 ranges**
-  (`<1`, `1-10`, `10-100`, `100-1000`, `>1000` us). Counts live in the layer table as
-  the proto's flattened `LatencyBuckets` columns; the boundaries live in the
-  `latency_buckets` table — the columns alone don't say what range they cover.
+  the boundaries with `-lat-buckets 1,10,100,1000`; **n thresholds give n+1 buckets**
+  (`< 1 us`, `1-10 us`, `10-100 us`, `100 us - 1 ms`, `> 1 ms`). Counts live in the
+  layer table as the proto's flattened `LatencyBuckets` columns; the ranges live in the
+  `latency_buckets` table, one row per bucket, with a legend-ready `range` string — the
+  count columns alone don't say what range they cover.
 
 ## Database / analysis (ClickHouse)
 

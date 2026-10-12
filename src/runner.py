@@ -109,9 +109,10 @@ def _write_latency_buckets(input_dir: Path, run_id: str, st: Store) -> int:
         return 0
     st.ensure_table(runconfig.TABLE, runconfig.COLUMNS, runconfig.ORDER_BY)
     loaded_at = datetime.now().replace(microsecond=0)
-    st.insert(runconfig.TABLE, [c.name for c in runconfig.COLUMNS],
-              [(run_id, idx, us, loaded_at) for idx, us in thresholds])
-    return len(thresholds)
+    rows = [(run_id, idx, label, us, loaded_at)
+            for idx, label, us in runconfig.bucket_rows(thresholds)]
+    st.insert(runconfig.TABLE, [c.name for c in runconfig.COLUMNS], rows)
+    return len(rows)
 
 
 def run_load(input_dir: Path, cfg: Config, store: Store | None = None) -> LoadReport:

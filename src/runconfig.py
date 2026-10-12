@@ -32,11 +32,92 @@ _KEY_RE = re.compile(r"^lat_option_us_(\d+)$")
 TABLE = "latency_buckets"
 COLUMNS = [
     Column("run_id", "String"),
-    Column("option_index", "UInt16"),      # the N in lat_option_us_N, 1-based
-    Column("threshold_us", "UInt64"),      # the threshold, in microseconds
+    Column("option_index", "UInt16"),      # bucket position, 0..n (see bucket_rows)
+    Column("range", "String"),             # "1-10 ms", ready for a chart legend
+    Column("threshold_us", "UInt64"),      # the threshold opening the bucket, 0 if none
     Column("_loaded_at", "DateTime"),
 ]
 ORDER_BY = ["run_id", "option_index"]
+
+# A Grafana legend has little room, and a raw microsecond threshold spends it
+# badly: "50000000" says much less at a glance than "50 s". So a threshold is
+# rendered in the largest unit that keeps its number small.
+_UNITS = [
+    (1, "µs"),              # microseconds
+    (1_000, "ms"),
+    (1_000_000, "s"),
+    (60_000_000, "min"),
+    (3_600_000_000, "h"),
+]
+
+
+def _scale(us: int) -> tuple[int, str]:
+    """The largest unit whose value is still at least 1, as (divisor, suffix)."""
+    chosen = _UNITS[0]
+    for unit in _UNITS:
+        if us >= unit[0]:
+            chosen = unit
+    return chosen
+
+
+def _number(us: int, divisor: int) -> str:
+    """The scaled number with no trailing noise: 1000/1000 -> '1',
+    1500/1000 -> '1.5'."""
+    if us % divisor == 0:
+        return str(us // divisor)
+    return f"{us / divisor:.3f}".rstrip("0").rstrip(".")
+
+
+def format_us(us: int) -> str:
+    """Microseconds as a short, readable time.
+
+    1 -> '1 µs', 1000 -> '1 ms', 10_000_000 -> '10 s', 50_000_000 -> '50 s'.
+    """
+    divisor, suffix = _scale(us)
+    return f"{_number(us, divisor)} {suffix}"
+
+
+def _range_label(lo: int | None, hi: int | None) -> str:
+    """One bucket's range, for the `range` column.
+
+    An open end reads '< x' or '> x'. When both bounds fall in the same unit it
+    is written once ('1-10 ms'); when they differ, both carry it
+    ('100 µs - 1 ms'). Keeping the shared case short is the point of the
+    column, so it is not spelled out twice.
+    """
+    if lo is None:
+        return f"< {format_us(hi)}"
+    if hi is None:
+        return f"> {format_us(lo)}"
+    lo_div, lo_unit = _scale(lo)
+    hi_div, hi_unit = _scale(hi)
+    if lo_unit == hi_unit:
+        return f"{_number(lo, lo_div)}-{_number(hi, hi_div)} {lo_unit}"
+    return f"{format_us(lo)} - {format_us(hi)}"
+
+
+def bucket_rows(thresholds: list[tuple[int, int]]) -> list[tuple[int, str, int]]:
+    """`[(option_index, range, threshold_us)]` — one row per **bucket**, so n
+    thresholds give n+1 rows.
+
+    `option_index` is the bucket's position, which lines up with the proto's
+    positional bucket fields: 0 is `latency_lh_opt1` (below the first
+    threshold), i is `latency_bw_opt<i>_and_opt<i+1>`, and n is
+    `latency_overflow` (above the last threshold).
+
+    `threshold_us` carries the threshold that opens the bucket. The two
+    open-ended buckets get 0: neither is named by a single threshold, and 0
+    marks them as the unbounded ends rather than implying a boundary. Their
+    bound is still readable in `range`.
+    """
+    if not thresholds:
+        return []
+    vals = [us for _, us in thresholds]
+    rows = [(0, _range_label(None, vals[0]), 0)]
+    rows += [(i, _range_label(lo, hi), lo)
+             for i, (lo, hi) in enumerate(zip(vals, vals[1:]), start=1)]
+    rows.append((len(vals), _range_label(vals[-1], None), 0))
+    return rows
 
 
 def find_file(run_dir: Path) -> Path | None:

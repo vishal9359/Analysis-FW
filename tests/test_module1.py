@@ -607,14 +607,21 @@ def test_latency_buckets_loaded_into_their_own_table(where):
         store = MemoryStore(); store.connect()
         report = run_load(run, _cfg(), store)
 
-        assert report.latency_buckets == 4
+        assert report.latency_buckets == 5          # 4 thresholds -> 5 buckets
         cols = [c.name for c in store.columns[runconfig.TABLE]]
-        assert cols == ["run_id", "option_index", "threshold_us", "_loaded_at"]
+        assert cols == ["run_id", "option_index", "range", "threshold_us",
+                        "_loaded_at"]
         assert store.order_by[runconfig.TABLE] == ["run_id", "option_index"]
 
         rows = [dict(zip(cols, r)) for r in store.tables[runconfig.TABLE]]
-        assert [(r["option_index"], r["threshold_us"]) for r in rows] == \
-               [(1, 1), (2, 10), (3, 100), (4, 1000)]
+        assert [(r["option_index"], r["range"], r["threshold_us"])
+                for r in rows] == [
+            (0, "< 1 µs", 0),
+            (1, "1-10 µs", 1),
+            (2, "10-100 µs", 10),
+            (3, "100 µs - 1 ms", 100),
+            (4, "> 1 ms", 0),
+        ]
         assert {r["run_id"] for r in rows} == {run.name}
 
         # the thresholds are config, not measurements: they must not be counted
@@ -653,3 +660,58 @@ def test_latency_buckets_rejects_untrustworthy_file(body, match):
         run = _run_with_yaml(Path(td), body)
         with pytest.raises(InputError, match=match):
             runconfig.read_thresholds(run)
+
+
+# ---- latency bucket range labels ------------------------------------------
+
+def test_format_us_picks_the_largest_small_unit():
+    """A raw microsecond threshold reads badly in a chart legend; 50000000 says
+    much less at a glance than '50 s'."""
+    f = runconfig.format_us
+    assert f(1) == "1 \u00b5s"
+    assert f(999) == "999 \u00b5s"
+    assert f(1_000) == "1 ms"
+    assert f(1_500) == "1.5 ms"           # no trailing zeros
+    assert f(100_000) == "100 ms"
+    assert f(1_000_000) == "1 s"
+    assert f(50_000_000) == "50 s"
+    assert f(90_000_000) == "1.5 min"
+    assert f(3_600_000_000) == "1 h"
+    assert f(0) == "0 \u00b5s"
+
+
+def test_bucket_rows_match_the_requested_ranges():
+    """The worked example: 8 decade thresholds give 9 buckets, open at both
+    ends."""
+    th = [(i, v) for i, v in enumerate(
+        [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000], start=1)]
+    rows = runconfig.bucket_rows(th)
+
+    assert [r[1] for r in rows] == [
+        "< 1 \u00b5s", "1-10 \u00b5s", "10-100 \u00b5s", "100 \u00b5s - 1 ms",
+        "1-10 ms", "10-100 ms", "100 ms - 1 s", "1-10 s", "> 10 s",
+    ]
+    # one row per bucket, indexed 0..n to match the proto's positional fields
+    assert [r[0] for r in rows] == list(range(9))
+    # the open ends carry no threshold; every middle bucket is opened by one
+    assert rows[0][2] == 0 and rows[-1][2] == 0
+    assert [r[2] for r in rows[1:-1]] == [1, 10, 100, 1000, 10000, 100000,
+                                          1000000]
+
+
+def test_bucket_rows_scale_to_any_n():
+    """n is whatever the operator passed to -lat-buckets, so n+1 rows always."""
+    for n in (1, 2, 3, 5, 16, 40):
+        th = [(i, 10 ** i) for i in range(1, n + 1)]
+        rows = runconfig.bucket_rows(th)
+        assert len(rows) == n + 1
+        assert rows[0][1].startswith("< ") and rows[-1][1].startswith("> ")
+    assert runconfig.bucket_rows([]) == []
+
+
+def test_bucket_rows_write_a_shared_unit_once():
+    """'1-10 ms' beats '1 ms - 10 ms' in a legend; different units need both."""
+    same = runconfig.bucket_rows([(1, 1000), (2, 10_000)])[1][1]
+    assert same == "1-10 ms"
+    mixed = runconfig.bucket_rows([(1, 100), (2, 1000)])[1][1]
+    assert mixed == "100 \u00b5s - 1 ms"

@@ -204,14 +204,22 @@ latency_bucket_thresholds_us:
 ```
 
 If that file is present (in the run directory or its `Config/`), the loader creates
-`latency_buckets` and writes one row per threshold:
+`latency_buckets` and writes **one row per bucket** — *n* thresholds give *n+1* rows:
 
-| run_id | option_index | threshold_us | _loaded_at |
-|---|---|---|---|
-| ProfileData-… | 1 | 1 | … |
-| ProfileData-… | 2 | 10 | … |
-| ProfileData-… | 3 | 100 | … |
-| ProfileData-… | 4 | 1000 | … |
+| run_id | option_index | range | threshold_us | _loaded_at |
+|---|---|---|---|---|
+| ProfileData-… | 0 | `< 1 µs` | 0 | … |
+| ProfileData-… | 1 | `1-10 µs` | 1 | … |
+| ProfileData-… | 2 | `10-100 µs` | 10 | … |
+| ProfileData-… | 3 | `100 µs - 1 ms` | 100 | … |
+| ProfileData-… | 4 | `> 1 ms` | 0 | … |
+
+`range` is rendered for a chart legend: a raw threshold like `50000000` says much less
+at a glance than `50 s`. Values scale µs → ms → s → min → h, and a bucket whose bounds
+share a unit writes it once (`1-10 ms`). The two open-ended buckets carry
+`threshold_us = 0` — neither is named by a single threshold — and their bound is
+readable in `range`. `option_index` is the bucket position, matching the proto's
+positional fields (0 = `latency_lh_opt1`, *n* = `latency_overflow`).
 
 **Why it has to be stored.** The measurements land in the layer table as counts —
 `read_device_latency_latency_bw_opt2_and_opt3` means "IOs between the 2nd and 3rd
@@ -222,6 +230,14 @@ ranges. Labelling queries: [docs/block-metrics.md](docs/block-metrics.md).
 
 **n thresholds describe n+1 ranges** — `1,10,100,1000` gives `<1`, `1–10`, `10–100`,
 `100–1000`, `>1000`. The table stores the 4 boundaries.
+
+> **Upgrading an existing database:** `latency_buckets` gained the `range` column and
+> changed from one row per threshold to one row per bucket. `ensure_table` issues
+> `CREATE TABLE IF NOT EXISTS`, which does **not** add a column to a table that already
+> exists, so a load against an older `latency_buckets` fails on the missing column. Drop
+> it first — `DROP TABLE profile_fw.latency_buckets` — and the next load recreates it.
+> Automatic schema migration is deferred debt
+> ([ADR-0006](docs/decisions/0006-mvp-append-only-ingest.md)).
 
 `-lat-buckets` is optional, so **no file is normal** and simply produces no table. A
 file that *is* present but malformed **fails the load** — storing counts that can never

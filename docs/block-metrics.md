@@ -167,44 +167,54 @@ read_device_latency_latency_overflow           IOs slower than the last threshol
 
 The columns say *which* bucket, never *what range* — the operator chooses that per run
 with `-lat-buckets`. The ranges live in the `latency_buckets` table
-([ADR-0011](decisions/0011-run-level-config-sidecars.md)):
+([ADR-0011](decisions/0011-run-level-config-sidecars.md)), **one row per bucket**, with
+the label already rendered:
 
 ```sql
-SELECT option_index, threshold_us
+SELECT option_index, `range`, threshold_us
 FROM latency_buckets
 WHERE run_id = {run:String}
 ORDER BY option_index;
--- 1 → 1    2 → 10    3 → 100    4 → 1000     (microseconds)
 ```
 
-**n thresholds describe n+1 ranges.** Four thresholds give `<1`, `1–10`, `10–100`,
-`100–1000`, `>1000` µs.
+For `-lat-buckets 1,10,100,1000,10000,100000,1000000,10000000`:
 
-### Human-readable ranges for a run
+| option_index | range | threshold_us |
+|---|---|---|
+| 0 | `< 1 µs` | 0 |
+| 1 | `1-10 µs` | 1 |
+| 2 | `10-100 µs` | 10 |
+| 3 | `100 µs - 1 ms` | 100 |
+| 4 | `1-10 ms` | 1000 |
+| 5 | `10-100 ms` | 10000 |
+| 6 | `100 ms - 1 s` | 100000 |
+| 7 | `1-10 s` | 1000000 |
+| 8 | `> 10 s` | 0 |
 
-Build the labels from the thresholds, so the same query works whatever `-lat-buckets`
-the run used. `DISTINCT` guards against the duplicate rows an append-only re-load
-leaves behind ([ADR-0006](decisions/0006-mvp-append-only-ingest.md)):
+**n thresholds give n+1 buckets.** `option_index` is the bucket's position and lines up
+with the proto's positional fields: 0 is `latency_lh_opt1`, *i* is
+`latency_bw_opt<i>_and_opt<i+1>`, and *n* is `latency_overflow`. `threshold_us` is the
+threshold that opens the bucket; the two open-ended buckets carry 0, and their bound is
+readable in `range`.
+
+> `range` is also a ClickHouse function name, so quote it as `` `range` `` in queries.
+
+### Using the label in a panel
+
+The label is pre-rendered precisely so a panel doesn't have to build it. Join on
+`run_id` and the legend reads `100 µs - 1 ms` instead of `100000`. `DISTINCT` guards
+against the duplicate rows an append-only re-load leaves behind
+([ADR-0006](decisions/0006-mvp-append-only-ingest.md)):
 
 ```sql
-WITH t AS (
-    SELECT DISTINCT option_index, threshold_us
-    FROM latency_buckets
-    WHERE run_id = {run:String}
-)
-SELECT
-    option_index                                            AS bucket,
-    concat('latency_bw_opt', toString(option_index),
-           '_and_opt', toString(option_index + 1))           AS column_name,
-    concat(toString(threshold_us), '-',
-           toString(anyIf(threshold_us,
-                          option_index = t.option_index + 1)), ' us') AS range_label
-FROM t
-ORDER BY bucket;
+SELECT DISTINCT option_index, `range`
+FROM latency_buckets
+WHERE run_id = {run:String}
+ORDER BY option_index;
 ```
 
-In practice it is simpler to read the thresholds once (they are 4–16 rows) and build the
-labels in the dashboard or the calling code, rather than in SQL.
+Map bucket *i* to its column with the proto's naming — `latency_lh_opt1` for 0,
+`latency_bw_opt<i>_and_opt<i+1>` for the middle, `latency_overflow` for *n*.
 
 ### Bucket counts as a distribution
 
