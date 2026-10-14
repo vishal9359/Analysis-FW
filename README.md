@@ -1,326 +1,459 @@
-# Analysis Framework — Module 1 (Offline Ingest)
+# Analysis Framework — Profiling Data Loader
 
-Loads Profile FW protobuf profiling data into ClickHouse. Given a
-`ProfileData-<tag>-<timestamp>` run directory, it decodes every record and
-writes it to typed ClickHouse tables — completely, correctly, and repeatably.
+Load Profile FW profiling data into ClickHouse, so you can query and chart it.
 
-The schema is derived from the producer's `.proto` at runtime, so new fields,
-new layers, and new producers need **no code change**.
+Point the loader at a profiling run, and it creates the database, creates the tables
+and inserts the rows. You don't define any schema: the tables are built from the
+`.proto` files that ship inside the run, so when the profiler adds a field or a new
+layer, the loader picks it up with no change and no configuration.
 
-> **Project context** — this README is the developer quickstart. For the full
-> picture (why the project exists, where it's going, and why it's built this way)
-> start at [CLAUDE.md](CLAUDE.md), then [docs/overview.md](docs/overview.md),
-> [docs/architecture.md](docs/architecture.md), [docs/roadmap.md](docs/roadmap.md),
-> and the decision records in [docs/decisions/](docs/decisions/). Imported
-> requirements, planning context, and DB research are under
-> [docs/reference/](docs/reference/).
+**Version 0.1.0.**
 
-## Architecture
+---
 
-```
- Profile FW (on each SUT)                    Analysis FW — Module 1 (this repo)
- ────────────────────────                    ──────────────────────────────────
- writes one run directory:                   $ python -m src <run_dir>
-   ProfileData-<tag>-<ts>/                              │
-     Config/run_config.log                              ▼
-     Linux/<layer>/<layer>_<type>.proto     ┌───────────────────────────────────┐
-     Linux/<layer>/<layer>_<type>.pb   ───► │ discover → registry → reader →     │
-     SSD/ ...                                │ worker → store                     │
-                                             └───────────────────────────────────┘
-                                                         │
-                                                         ▼
-                                             ClickHouse — one DB per producer,
-                                             one table per <layer>_<type>
-```
+## Contents
 
-Pipeline stages (each a module):
+- [Prerequisites](#prerequisites)
+- [Install](#install)
+- [Configure](#configure)
+- [Prepare your data](#prepare-your-data)
+- [Run the loader](#run-the-loader)
+- [What you get](#what-you-get)
+- [Latency buckets](#latency-buckets)
+- [Checking that a load worked](#checking-that-a-load-worked)
+- [Troubleshooting](#troubleshooting)
+- [Known limits in this release](#known-limits-in-this-release)
 
-```
-discover   walk the run dir; pair each <stem>.proto with its <stem>.pb part(s)
-registry   compile the .proto at runtime → derive ClickHouse table(s) + columns
-reader     parse each .pb (one wrapper message) and iterate its records
-worker     flatten a record → row(s): scalars → main table, repeated → child tables
-store      create tables if absent; batched INSERT   (ClickHouse; in-memory for tests)
-```
+---
 
-| Path | Responsibility |
+## Prerequisites
+
+| | Requirement |
 |---|---|
-| `src/cli.py` | entry point; single-vs-batch dispatch; exit codes; JSON report |
-| `src/config.py` + `config/config.yaml` | load/validate config; `CH_HOST`/`CH_PORT` env + `--config` overrides |
-| `src/discover.py` | walk run dir, group `.proto`/`.pb` by stem, order split parts |
-| `src/registry.py` | compile `.proto` → table schema (main + child tables) |
-| `src/reader.py` | parse a `.pb` wrapper, yield records |
-| `src/worker.py` | flatten records → rows; timestamp parsing |
-| `src/runner.py` | run one directory (units in parallel) and batches of runs |
-| `src/store/` | ClickHouse adapter + in-memory adapter (tests) |
-| `config/`, `docs/`, `tests/` | editable config; docs (design, block-metrics, timestamp); test suite + fixtures |
+| **Python** | 3.10 or newer (tested on 3.12) |
+| **ClickHouse** | A running server reachable over its **HTTP port** (default `8123`). Tested against ClickHouse 25.6. |
+| **Data** | One or more `ProfileData-*` run directories produced by Profile FW |
+| **Disk** | Only for the input data — the loader streams it and keeps nothing |
+
+**ClickHouse must accept the default user with no password.** This release does not
+send credentials, so a server that requires a username and password will not work.
+See [Known limits](#known-limits-in-this-release).
+
+You do **not** need to create the database or any tables by hand. The loader creates
+whatever is missing.
+
+### Quick check that ClickHouse is reachable
+
+```bash
+curl http://localhost:8123/ping          # expect: Ok.
+```
+
+---
 
 ## Install
 
-```bash
-pip install -r requirements.txt      # protobuf, grpcio-tools, PyYAML, clickhouse-connect
-```
-
-## Usage
-
-**One run** — from the repo root; the input path is the only argument (config
-comes from `config/config.yaml`):
+The loader runs from its source directory — there is nothing to install into your
+Python environment besides the dependencies.
 
 ```bash
-python -m src /data/incoming/ProfileData-fio-4k-randread-20260627-144048
+git clone https://github.com/vishal9359/Analysis-FW.git
+cd Analysis-FW
+
+python -m venv .venv
+source .venv/bin/activate                # Windows: .venv\Scripts\activate
+
+pip install -r requirements.txt
 ```
 
-**Many runs (batch)** — point at a parent directory of `ProfileData-*` runs; it
-loads each sequentially (each run still parallelizes its own units):
+### Dependencies
+
+Installed by the command above:
+
+| Package | Why it's needed |
+|---|---|
+| `protobuf` | reads the profiling data |
+| `grpcio-tools` | bundles `protoc`, used to compile the run's `.proto` files |
+| `PyYAML` | reads the config file |
+| `clickhouse-connect` | talks to ClickHouse |
+| `pytest` | only for the self-check below |
+
+### Verify the install
 
 ```bash
-python -m src /data/incoming              # auto-detected as batch
-python -m src /data/incoming --batch      # force batch
-python -m src /data/incoming --continue-on-error   # attempt every run
+python -m src --version                  # prints the version
+python -m pytest tests/ -q               # end-to-end self-check
 ```
 
-Default is **fail-fast**: the first failed run stops the batch and the rest are
-marked `skipped`. `--continue-on-error` attempts all and collects failures.
+The self-check runs the whole pipeline against an in-memory store, so it needs **no
+database**. If it passes, the installation is sound and any remaining problem is
+configuration, connectivity or input data.
 
-Override the ClickHouse endpoint without editing the config:
+> Run every command **from the `Analysis-FW` directory** (`python -m src` needs it).
+
+---
+
+## Configure
+
+Settings live in **`config/config.yaml`**, next to the code, so you can edit it in
+place. The defaults work against a local ClickHouse.
+
+```yaml
+producer:
+  name: profile_fw          # label shown in logs and the summary
+  database: profile_fw      # ClickHouse database to write into
+
+store:
+  host: localhost           # ClickHouse host
+  port: 8123                # ClickHouse HTTP port
+  batch_size: 100000        # rows per insert
+  workers: 4                # how many data files load at once
+  async_insert: false       # leave false, or reported row counts become unreliable
+
+logging:
+  level: INFO               # DEBUG | INFO | WARNING | ERROR
+  format: json              # json | text
+```
+
+| Setting | What to change it for |
+|---|---|
+| `producer.database` | Write a different producer's data into its own database |
+| `store.host` / `store.port` | Point at a remote ClickHouse |
+| `store.batch_size` | Lower it if inserts are rejected as too large; raise it for throughput |
+| `store.workers` | Match your CPU count. `1` loads serially, which gives the clearest logs when diagnosing a problem |
+| `logging.format` | `text` is easier to read by eye; `json` suits log collectors |
+
+### Overriding without editing the file
 
 ```bash
-CH_HOST=10.0.0.5 CH_PORT=8123 python -m src <dir>
+CH_HOST=db-host CH_PORT=8123 python -m src /data/ProfileData-baseline-20261012-1230
+
+python -m src /data/ProfileData-baseline-20261012-1230 --config /etc/analysis-fw.yaml
 ```
 
-**Exit codes** tell the caller the failure class: `0` ok · `2` config ·
-`3` input · `4` schema · `5` database (retryable) · `6` integrity. In batch, the
-code is the first failing run's class.
+`CH_HOST` and `CH_PORT` take precedence over the file. `--config` replaces the file
+entirely.
 
-**Verify** what landed:
+---
+
+## Prepare your data
+
+A **run** is one `ProfileData-<tag>-<timestamp>` directory, exactly as Profile FW
+writes it. Keep it intact — the loader needs the `.proto` files that sit beside the
+data.
+
+```
+ProfileData-baseline-20261012-1230/
+├── Config/
+│   ├── run_config.log
+│   └── …
+├── latency_bucket_options.yaml          (only if -lat-buckets was used)
+├── Linux/
+│   ├── Block/
+│   │   ├── linux_block_1_stats.proto    schema
+│   │   ├── linux_block_1_stats.000.pb   data, part 1
+│   │   ├── linux_block_1_stats.001.pb   data, part 2
+│   │   ├── linux_block_2_misc.proto
+│   │   └── linux_block_2_misc.pb        data, single file
+│   ├── NVMe/
+│   └── Syscall/
+└── SSD/
+```
+
+Rules the loader relies on:
+
+- Every data file has a **matching `.proto` in the same folder**. `foo.pb` needs
+  `foo.proto`.
+- A large data set is split into numbered parts — `foo.000.pb`, `foo.001.pb` — and
+  they must be **complete and consecutive**. A missing part is reported rather than
+  silently skipped.
+- Folder names below the run directory are free: the loader searches the whole tree.
+- **`Config/` is ignored.**
+
+The run directory name becomes the `run_id` on every row, so keep it meaningful — it
+is how you select one profiling session later.
+
+---
+
+## Run the loader
+
+### One run
+
+```bash
+python -m src /data/ProfileData-baseline-20261012-1230
+```
+
+### Several runs
+
+Point at the **parent** directory and every `ProfileData-*` inside it is loaded, one
+after another. This is detected automatically:
+
+```bash
+python -m src /data
+```
+
+By default the batch **stops at the first run that fails**. To load everything and
+collect the failures instead:
+
+```bash
+python -m src /data --continue-on-error
+```
+
+### All options
+
+| Option | Effect |
+|---|---|
+| *(none)* | Load the given run, or every `ProfileData-*` under it |
+| `--batch` | Force batch mode (normally detected) |
+| `--continue-on-error` | Batch: keep going after a run fails |
+| `--config PATH` | Use a different config file |
+| `--version` | Print the version |
+| `-h`, `--help` | Show usage |
+
+A machine-readable summary is printed to **stdout**; progress and errors go to
+**stderr**. So this keeps the summary clean:
+
+```bash
+python -m src /data/ProfileData-baseline-20261012-1230 > summary.json
+```
+
+---
+
+## What you get
+
+One **database** (`producer.database`, default `profile_fw`) containing one **table per
+data file**, named after the file:
+
+```
+linux_block_1_stats.pb   →  table  linux_block_1_stats
+linux_block_2_misc.pb    →  table  linux_block_2_misc
+```
+
+Every table carries the same leading and trailing columns:
+
+| Column | Meaning |
+|---|---|
+| `run_id` | the run directory name — **use this to select one profiling session** |
+| `ts` | the record's timestamp, as a ClickHouse `DateTime` (UTC) |
+| `timestamp` | the original timestamp string, exactly as profiled |
+| `hostname`, `component`, `tag`, `log_level` | the record header |
+| …the profiled fields… | one column per field, named as in the `.proto` |
+| `_loaded_at` | when this row was inserted |
+
+Tables are `MergeTree`, partitioned by `run_id` and sorted by
+`(run_id, hostname, ts)`.
+
+### Per-queue, per-core and similar tables
+
+Where the profiler reports a list per record — per queue, per CPU core, per latency
+window — those rows go into a **companion table** named after the main table and the
+field:
+
+```
+linux_nvme_1_stats                                   one row per record
+linux_nvme_1_stats_per_queue                         one row per queue, per record
+linux_nvme_1_stats_per_core                          one row per core, per record
+linux_nvme_2_lbarandomness_per_core_seq_random_entries
+```
+
+A `record_id` column links them back to the main row:
 
 ```sql
-SELECT count() FROM profile_fw.linux_block_1_stats;
-SELECT run_id, count() FROM profile_fw.linux_block_1_stats GROUP BY run_id;
+SELECT *
+FROM linux_nvme_1_stats       AS m
+JOIN linux_nvme_1_stats_per_queue AS q USING (run_id, record_id)
+WHERE m.run_id = 'ProfileData-baseline-20261012-1230';
 ```
 
-## Input contract
+Tables with no such lists have no `record_id` — they don't need one.
 
-Each layer folder holds one or more **types**, each a `.proto` + its `.pb` data:
+### Starter queries
 
-```
-<layer>_<type>.proto        schema
-<layer>_<type>.pb           data (single file)
-<layer>_<type>.<NNN>.pb     data (split parts, in order 000, 001, …)
-```
+```sql
+-- which tables were created
+SHOW TABLES FROM profile_fw;
 
-Every `.proto` follows the agreed shape:
+-- which runs have been loaded
+SELECT run_id, min(ts) AS started, max(ts) AS ended, count() AS rows
+FROM profile_fw.linux_block_1_stats
+GROUP BY run_id ORDER BY started DESC;
 
-```proto
-message GenericFormat { string timestamp; string hostname; uint32 component;
-                        string tag; uint32 log_level; }        // the header
-message Payload       { ... layer-specific scalar fields ... }    // the data
-message StatLog       { GenericFormat generic_format = 1;       // one record
-                        Payload payload = 2; }
-message StatLogs      { repeated StatLog stat_logs = 1; }       // a .pb file
-```
-
-- A `.pb` file **is one `StatLogs` wrapper** holding a `repeated` list of
-  records — protobuf's repeated encoding delimits them, so there is **no framing
-  / length prefix**. A big run is split into several `.pb` files, each a complete
-  wrapper.
-- The loader finds record / header / payload / wrapper **by structure** (the
-  record is the message with a `generic_format` field and a `payload` field), not
-  by message name — so protos may reuse `StatLog`/`StatLogs`/`Payload` (each is
-  compiled in its own descriptor pool; identical names never collide).
-- `Config/` is ignored. Timestamps: RFC 3339 UTC — see
-  [docs/timestamp-format.md](docs/timestamp-format.md).
-
-## What lands in ClickHouse
-
-- **One database per producer** (`producer.database` in config), so component
-  ids never collide across producers.
-- **One table per `<layer>_<type>`** (the file stem is the table name).
-- Each record is flattened to one row: `run_id`, `ts` (parsed from `timestamp`),
-  the generic header fields, the payload scalar fields, `_loaded_at`.
-- `ENGINE = MergeTree`, `PARTITION BY run_id`, `ORDER BY (run_id, hostname, ts)`.
-  `run_id` is the run directory name.
-
-**Payload fields map to tables by shape.** The loader never hardcodes field names —
-it decides from each field's cardinality relative to the record:
-
-| Payload field | Cardinality | Becomes |
-|---|---|---|
-| scalar | 1:1 | a column on the main row |
-| singular message (`io_flags`) | 1:1 | flattened onto the main row: `io_flags_direct`, `io_flags_sync`, … |
-| `repeated <Message>` (`per_queue`) | 1:N | child table `<stem>_per_queue` |
-| repeated inside repeated (`per_core_seq_random[].entries[]`) | 1:N:M | leaf table `<stem>_per_core_seq_random_entries` |
-| repeated scalar | — | rejected — the loader errors out |
-
-- One record → **1 main row + N + M child rows** (additive, never N×M).
-- A `record_id` (UInt64) links them: `main JOIN child USING (run_id, record_id)`.
-- Child tables carry the header + `record_id` + their own fields, ordered by
-  their key dimension (`queue_id` / `cpu_id`) for fast filtering.
-- Scalar-only payloads (e.g. block) get no `record_id` and no child tables.
-
-**Nested repeated fields get one table, not two.** A repeated message that itself holds
-a repeated message is a *grouping level*, not a table. Its scalars are copied onto every
-leaf row, so one measurement is one row and no JOIN is needed:
-
-```
-Payload
-└── per_core_seq_random[]        cpu_id, dir          ← grouping level, no table
-    └── entries[]                start_time, …        ← leaf, gets the table
-
-linux_nvme_2_lbarandomness_per_core_seq_random_entries
-  run_id  ts  record_id  <header>  cpu_id  dir  start_time  end_time
-          accumulated_io_size  accumulated_io_count  is_sequential  _loaded_at
-  ORDER BY (run_id, hostname, cpu_id, ts)
+-- one run's data, in time order
+SELECT * FROM profile_fw.linux_block_1_stats
+WHERE run_id = 'ProfileData-baseline-20261012-1230'
+ORDER BY ts
+LIMIT 20;
 ```
 
-2 cores × {read, write} with 2/1/3/2 windows → **8 rows**, each carrying its own
-`cpu_id` and `dir`. Per-group aggregates come from `GROUP BY cpu_id, dir`.
+Ready-made IOPS, bandwidth and latency queries — including Grafana-friendly versions
+— are in [docs/block-metrics.md](docs/block-metrics.md).
 
-> ClickHouse does not preserve insertion order, so proto element order is **not**
-> recoverable from the table — always `ORDER BY start_time` (add `record_id` to
-> disambiguate across records). Producers must emit an ordering key on every leaf
-> element. See [ADR-0010](docs/decisions/0010-payload-field-shapes-to-tables.md).
+---
 
-## Run-level config sidecars
+## Latency buckets
 
-Some properties belong to the **run**, not to a record, and the profiler emits them as
-a file next to the data rather than inside the `.pb`. The loader reads these once per
-run and writes them to their own table, keyed by `run_id`.
-
-**Latency buckets.** The operator chooses the thresholds at profiling time:
+If the profiler was run with `-lat-buckets`, it records how many IOs fell into each
+latency range:
 
 ```bash
 ./bin/profile_fw -tag baseline -i 1 -d 1500 -dev nvme1 -lat-buckets 1,10,100,1000
 ```
 
-and the profiler writes `latency_bucket_options.yaml` into the workload folder:
+The **counts** land in the layer's own table, but those columns only say *which*
+bucket — not what range it covers, because you choose that per run. So the ranges are
+written to a **`latency_buckets`** table, one row per bucket:
 
-```yaml
-latency_bucket_thresholds_us:
-  lat_option_us_1: 1
-  lat_option_us_2: 10
-  lat_option_us_3: 100
-  lat_option_us_4: 1000
+| run_id | option_index | range | threshold_us |
+|---|---|---|---|
+| ProfileData-… | 0 | `< 1 µs` | 0 |
+| ProfileData-… | 1 | `1-10 µs` | 1 |
+| ProfileData-… | 2 | `10-100 µs` | 10 |
+| ProfileData-… | 3 | `100 µs - 1 ms` | 100 |
+| ProfileData-… | 4 | `> 1 ms` | 0 |
+
+- **You can pass any number of thresholds.** *n* thresholds describe *n+1* ranges —
+  the two open-ended ones at each end included.
+- **`range` is ready to use as a chart label.** Values are shown in the largest
+  sensible unit, so you get `50 s` rather than `50000000`.
+- `option_index` is the bucket's position, `0` being the fastest.
+- `threshold_us` is the threshold that opens the bucket, and `0` on the first and last
+  rows, which have no threshold on their open side.
+
+This table only appears if the run contains `latency_bucket_options.yaml` —
+`-lat-buckets` is optional, and a run profiled without it simply has no such table.
+
+How to join the ranges to the counts: [docs/block-metrics.md](docs/block-metrics.md).
+
+---
+
+## Checking that a load worked
+
+The loader prints a summary and **verifies its own work**: for every table it compares
+the records it read against the rows it inserted. A mismatch fails the run.
+
+```json
+{
+  "status": "complete",
+  "run_id": "ProfileData-baseline-20261012-1230",
+  "producer": "profile_fw",
+  "database": "profile_fw",
+  "totals": { "records": 2500, "rows": 30514, "units": 7, "latency_buckets": 5 },
+  "units": [
+    { "stem": "linux_block_1_stats", "files": 2, "records": 1000,
+      "tables": { "linux_block_1_stats": 1000 }, "ok": true }
+  ]
+}
 ```
 
-If that file is present (in the run directory or its `Config/`), the loader creates
-`latency_buckets` and writes **one row per bucket** — *n* thresholds give *n+1* rows:
+| Field | Meaning |
+|---|---|
+| `status` | `complete` or `failed` |
+| `totals.records` | profiling records read |
+| `totals.rows` | rows inserted |
+| `totals.units` | data sets loaded (one per `.proto`) |
+| `totals.latency_buckets` | latency range rows written, `0` if the run had none |
+| `units[].ok` | `false` means that data set did not reconcile |
 
-| run_id | option_index | range | threshold_us | _loaded_at |
-|---|---|---|---|---|
-| ProfileData-… | 0 | `< 1 µs` | 0 | … |
-| ProfileData-… | 1 | `1-10 µs` | 1 | … |
-| ProfileData-… | 2 | `10-100 µs` | 10 | … |
-| ProfileData-… | 3 | `100 µs - 1 ms` | 100 | … |
-| ProfileData-… | 4 | `> 1 ms` | 0 | … |
+`rows` is normally larger than `records`, because per-queue and per-core lists add
+rows of their own.
 
-`range` is rendered for a chart legend: a raw threshold like `50000000` says much less
-at a glance than `50 s`. Values scale µs → ms → s → min → h, and a bucket whose bounds
-share a unit writes it once (`1-10 ms`). The two open-ended buckets carry
-`threshold_us = 0` — neither is named by a single threshold — and their bound is
-readable in `range`. `option_index` is the bucket position, matching the proto's
-positional fields (0 = `latency_lh_opt1`, *n* = `latency_overflow`).
+### Exit codes
 
-**Why it has to be stored.** The measurements land in the layer table as counts —
-`read_device_latency_latency_bw_opt2_and_opt3` means "IOs between the 2nd and 3rd
-threshold", which is 10–100 µs *for this run only*. The thresholds are in neither the
-`.pb` nor the `.proto`, so without this table the bucket columns can never be labelled,
-and two runs profiled with different `-lat-buckets` would silently compare different
-ranges. Labelling queries: [docs/block-metrics.md](docs/block-metrics.md).
+Useful for scripts and schedulers — the code tells you whether retrying can help.
 
-**n thresholds describe n+1 ranges** — `1,10,100,1000` gives `<1`, `1–10`, `10–100`,
-`100–1000`, `>1000`. The table stores the 4 boundaries.
+| Code | Meaning | Retry? |
+|---|---|---|
+| `0` | Success | — |
+| `2` | Bad config | No — fix `config.yaml` |
+| `3` | Input problem: missing path, unreadable or corrupt data | No — fix the data |
+| `4` | A `.proto` would not compile, or doesn't match the expected shape | No — fix the schema |
+| `5` | ClickHouse connect, insert or table-creation failure | **Often yes** — usually transient |
+| `6` | Records read did not match rows inserted | No — investigate |
+| `1` | Unexpected error | Report it |
 
-> **Upgrading an existing database:** `latency_buckets` gained the `range` column and
-> changed from one row per threshold to one row per bucket. `ensure_table` issues
-> `CREATE TABLE IF NOT EXISTS`, which does **not** add a column to a table that already
-> exists, so a load against an older `latency_buckets` fails on the missing column. Drop
-> it first — `DROP TABLE profile_fw.latency_buckets` — and the next load recreates it.
-> Automatic schema migration is deferred debt
-> ([ADR-0006](docs/decisions/0006-mvp-append-only-ingest.md)).
-
-`-lat-buckets` is optional, so **no file is normal** and simply produces no table. A
-file that *is* present but malformed **fails the load** — storing counts that can never
-be interpreted is worse than stopping. Checked: indices contiguous from 1, thresholds
-strictly increasing, values whole and non-negative. See
-[ADR-0011](docs/decisions/0011-run-level-config-sidecars.md).
-
-## Configuration
-
-Config lives at `config/config.yaml` (repo root), separate from the code so an
-operator can edit it in place. It is resolved relative to the source tree, so it
-loads from any working directory. Key settings: `producer.database`,
-`store.host`/`port` (also env-overridable — see Usage), `store.batch_size`,
-`store.workers` (per-run process pool). Point at a different file with
-`--config /path/to/config.yaml`. DB credentials are **not** in config (the
-target uses the default user).
-
-## Generate simulated data
-
-`tests/make_fixture.py` writes a `ProfileData-*` run of realistic per-second
-time-series data (increasing timestamps, monotonic counters), so the pipeline
-and the metric queries can be exercised without waiting for real profiling:
-
-```bash
-python tests/make_fixture.py /tmp/fix                        # from tests/sample_protos/
-python tests/make_fixture.py /tmp/fix --protos <proto_dir>   # from the real protos
-
-python -m src /tmp/fix/ProfileData-fixture-20260727-180221
-```
-
-It generates from **any** `.proto` by structure — drop a new one in and it is
-picked up, no code change. What it models beyond "fill every field":
-
-- **Grouping levels fan out over their dimensions.** A repeated message with a
-  key dimension *and* an enum (`NvmeCoreSeqRandom{cpu_id, dir, entries[]}`) gets
-  every combination — 12 cores × {READ, WRITE} = 24 groups, each core appearing
-  once per direction, which is what the profiler actually emits.
-- **Leaf measurement windows are real intervals.** `start_time`/`end_time` tile
-  the record's second per group — ordered, non-overlapping, `end > start` —
-  rather than two independent counters. That makes `ORDER BY start_time` return
-  the measurement order, the only ordering the database can give back.
-- **Counters are phased per group**, so cores differ from one another instead of
-  every group reporting identical numbers.
-- **Enums cycle their declared values**, so a column like `dir` is never
-  `UNSPECIFIED` on every row.
-
-The test suite rebuilds the fixture whenever any `.proto` changes (it hashes
-them into `tests/_fixture/.protos.sha256`), so the fixture cannot drift from the
-protos the loader is given.
-
-Deriving per-second IOPS, bandwidth, and latency from the loaded counters — with
-ready ClickHouse and Grafana queries — is in
-[docs/block-metrics.md](docs/block-metrics.md).
-
-## Scope & limitations (MVP)
-
-- **Append-only.** Re-loading the same run **duplicates** rows. The table's
-  `PARTITION BY run_id` is ready for a future coordinator to drop-and-replace.
-- **Single machine.** Batch is a bounded per-run loop; fleet fan-out (Airflow /
-  the streaming re-architecture) is out of scope.
-- **Adding a field to an existing table** needs a one-time `ALTER TABLE ADD
-  COLUMN` (auto-migrate is deferred).
-- `record_id` and `run_id` are single-node schemes; multi-node-safe versions are
-  deferred to the re-architecture.
-
-See [docs/design.md](docs/design.md) for the full design.
+---
 
 ## Troubleshooting
 
-A `.pb` that fails to parse is reported as an input error (exit 3) with the file,
-the expected message type, and the first bytes — it means the `.pb` does not
-match its `.proto` (schema/version drift) or is truncated/corrupt.
+**`config error: config: config file not found at …`**
+You are not in the `Analysis-FW` directory, or `config/config.yaml` was moved. `cd`
+into the repo, or pass `--config PATH`.
 
-If `ts` shows `1970-01-01`, the `timestamp` string couldn't be parsed (the raw
-string is still kept in the `timestamp` column). See
-[docs/timestamp-format.md](docs/timestamp-format.md) for the expected format.
+**`cannot connect to ClickHouse at <host>:<port>` (exit 5)**
+Check the server is up and the **HTTP** port is right (`8123`, not the native `9000`):
+`curl http://<host>:8123/ping`. If your server requires a username and password, this
+release cannot connect to it. The driver retries first, so expect a couple of
+`Retrying…` / `Unexpected Http Driver Exception` warnings above the real error — the
+last line is the one to read.
 
-## Test
+**`no .pb data files found under …` (exit 3)**
+The path isn't a run directory and holds no `ProfileData-*` runs. Pass the
+`ProfileData-*` directory itself, or its parent for batch mode.
 
-```bash
-python -m pytest tests/ -v
+**`unexpected .pb name (not <stem>[.NNN].pb) …` (exit 3)**
+A data file has been renamed. Parts must be `<name>.pb` or `<name>.000.pb`.
+
+**`<name>: found data files but no schema '<name>.proto' beside them` (exit 3)**
+A data file has no schema next to it. Copy the whole run directory, don't cherry-pick
+files.
+
+**`<name>: split parts are not contiguous 000..00N (got […])` (exit 3)**
+A numbered part is missing (`…000.pb`, `…002.pb`, but no `…001.pb`). The transfer was
+incomplete — recopy the run.
+
+**`protoc failed to compile` (exit 4)**
+The run's `.proto` has an error in it, such as a message name that doesn't match where
+it's used. The message names the file and line; it needs fixing on the profiler side.
+
+**`<file>.pb: could not parse the file as …` (exit 3)**
+The data doesn't match its `.proto` — usually the two came from different profiler
+versions — or the file is truncated. The message includes the file size and its first
+bytes, which is normally enough to tell a truncated file from a schema mismatch.
+
+**`ts` shows `1970-01-01`**
+The timestamp string could not be parsed. The original is always preserved in the
+`timestamp` column, so nothing is lost. See
+[docs/timestamp-format.md](docs/timestamp-format.md).
+
+**`insert into latency_buckets failed: … range …` (exit 5)**
+You have a `latency_buckets` table from an earlier version, which has no `range`
+column. Existing tables are never altered automatically, so drop it and load again —
+it is rebuilt:
+
+```sql
+DROP TABLE profile_fw.latency_buckets;
 ```
 
-Tests run the whole pipeline against an in-memory store — no database needed.
-`tests/make_fixture.py` generates sample runs from `tests/sample_protos/`; pass
-`--protos <dir>` to generate from the real protos instead.
+**Records read but no rows inserted (exit 6)**
+Don't query the data. Check the log for the failing table and report it with the
+summary JSON.
+
+---
+
+## Known limits in this release
+
+- **Loading a run twice duplicates its rows.** There is no reload or de-duplication
+  step yet. To reload a run, drop its partition first:
+  ```sql
+  ALTER TABLE profile_fw.linux_block_1_stats DROP PARTITION 'ProfileData-…';
+  ```
+  Do this for each affected table.
+- **No authentication.** ClickHouse must allow the default user with no password.
+- **New fields need a manual column.** If the profiler adds a field to a `.proto` you
+  have already loaded, the existing table won't gain the column by itself — add it
+  with `ALTER TABLE … ADD COLUMN`, or drop the table and reload.
+- **One machine at a time.** Batch mode is a loop over runs on the host you run it on;
+  there is no cluster-wide coordination.
+- **Offline only.** Data is loaded from completed runs. Live streaming is planned.
+
+---
+
+## More
+
+| | |
+|---|---|
+| IOPS / bandwidth / latency queries | [docs/block-metrics.md](docs/block-metrics.md) |
+| Timestamp formats | [docs/timestamp-format.md](docs/timestamp-format.md) |
+| Terminology | [docs/glossary.md](docs/glossary.md) |
+| Contributing / internals | [docs/development.md](docs/development.md) |
+
+Issues: https://github.com/vishal9359/Analysis-FW/issues

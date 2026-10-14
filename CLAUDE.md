@@ -18,8 +18,11 @@ runtime**. Full charter: [docs/overview.md](docs/overview.md).
 ```
 CLAUDE.md                     ← you are here: entry index + working rules
 AGENTS.md                     ← pointer here, for Codex and other AI agents
-README.md                     ← developer quickstart (install, run, test)
+README.md                     ← USER-FACING release doc (install, configure, run,
+                                query, troubleshoot) — no internals
 docs/
+├── development.md            ← developer guide: architecture, input contract,
+│                             derived schema, fixture generator, tests
 ├── overview.md               ← charter: what/why, sub-frameworks, ownership, data shape
 ├── architecture.md           ← end-to-end data flow; current MVP vs streaming target
 ├── roadmap.md                ← POC 1 done · MVP now · POC 2 next · deferred · open questions
@@ -63,7 +66,8 @@ where it and an ADR disagree, the ADR wins.
 | If you're… | Read |
 |---|---|
 | New to the project / need the "why" & boundary | [docs/overview.md](docs/overview.md) |
-| Working on the code / data flow | [docs/architecture.md](docs/architecture.md) + [README.md](README.md) |
+| Working on the code / data flow | [docs/architecture.md](docs/architecture.md) + [docs/development.md](docs/development.md) |
+| Changing anything a user sees (CLI, config, errors, tables) | [README.md](README.md) — keep it accurate; it is the release doc |
 | Planning next work / POC 2 / what's deferred | [docs/roadmap.md](docs/roadmap.md) |
 | Working on Phase 1 (plain-language request to graph) | [docs/goals-and-requirements.md](docs/goals-and-requirements.md) + [docs/phase1-tool-research.md](docs/phase1-tool-research.md) |
 | Working on the Phase 2 report system | [docs/goals-and-requirements.md](docs/goals-and-requirements.md) (Phase 2 part) |
