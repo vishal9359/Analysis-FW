@@ -62,7 +62,8 @@ store      create tables if absent; batched INSERT   (ClickHouse; in-memory for 
 ## Install
 
 ```bash
-pip install -r requirements.txt      # protobuf, grpcio-tools, PyYAML, clickhouse-connect
+pip install -r requirements.txt      # protobuf, grpcio-tools, PyYAML, clickhouse-connect,
+                                     # wrenai (Phase 1)
 ```
 
 ## Usage
@@ -288,9 +289,9 @@ picked up, no code change. What it models beyond "fill every field":
 - **Enums cycle their declared values**, so a column like `dir` is never
   `UNSPECIFIED` on every row.
 
-The test suite rebuilds the fixture whenever any `.proto` changes (it hashes
-them into `tests/_fixture/.protos.sha256`), so the fixture cannot drift from the
-protos the loader is given.
+The test suite rebuilds the fixture whenever any `.proto` or `tests/make_fixture.py`
+changes (it hashes them into `tests/_fixture/.protos.sha256`), so the fixture cannot
+drift from the protos the loader is given.
 
 Deriving per-second IOPS, bandwidth, and latency from the loaded counters — with
 ready ClickHouse and Grafana queries — is in
@@ -319,6 +320,49 @@ If `ts` shows `1970-01-01`, the `timestamp` string couldn't be parsed (the raw
 string is still kept in the `timestamp` column). See
 [docs/timestamp-format.md](timestamp-format.md) for the expected format.
 
+## Phase 1 — plain-language request to graph (in progress)
+
+Code in `analysis/`; design in [phase1-design.md](phase1-design.md); status and next
+steps in [roadmap.md](roadmap.md) ("Now — Phase 1"). Built so far: step 0 (find the
+run's database, compare its columns with the catalog), the run's per-interval views,
+the run's WrenAI data models, and check C1. `pip install -r requirements.txt` brings
+WrenAI (pinned to 0.15.0; it contains no AI).
+
+```bash
+python -m analysis check-run <run>         # where the run is, what it has (read-only)
+python -m analysis prepare <run>           # makes the run's views, checks they add up
+python -m analysis plan <run> "<query>"    # WrenAI plans it, check C1; --execute runs it
+python -m analysis plan-file out/<run>/data_models.json "<query>"   # no ClickHouse
+```
+
+`<run>` is the run folder's name. A query is written on the data models, for example
+`SELECT linux_block_1_stats.ts, linux_block_1_stats.read_iops FROM linux_block_1_stats
+WHERE linux_block_1_stats.run_id = '<run>'`. The ClickHouse host and port come from
+`config/config.yaml`, like the loader's.
+
+### Trying it on your own machine (ClickHouse in WSL2)
+
+Real profile data stays on the office box, but a simulated run works anywhere:
+
+```bash
+# 1. ClickHouse in WSL2, the office box's version. The loader connects as the
+#    default user with no password. WSL2 forwards localhost, so Windows sees :8123.
+docker run -d --name clickhouse -p 8123:8123 --ulimit nofile=262144:262144 \
+    -e CLICKHOUSE_SKIP_USER_SETUP=1 clickhouse/clickhouse-server:25.6
+
+# 2. A simulated run, from tests/sample_protos/
+python tests/make_fixture.py /tmp/sim        # -> /tmp/sim/ProfileData-fixture-20260727-180221
+
+# 3. Load it into a database of its own, as deploy.py does on the office box:
+#    copy config/config.yaml to sim.yaml and set  producer.database: profile_fw_sim
+python -m src /tmp/sim/ProfileData-fixture-20260727-180221 --config sim.yaml
+
+# 4. The Phase 1 steps
+python -m analysis check-run ProfileData-fixture-20260727-180221
+python -m analysis prepare   ProfileData-fixture-20260727-180221
+python -m analysis plan ProfileData-fixture-20260727-180221 "SELECT linux_block_1_stats.ts, linux_block_1_stats.read_iops FROM linux_block_1_stats WHERE linux_block_1_stats.run_id = 'ProfileData-fixture-20260727-180221'" --execute
+```
+
 ## Test
 
 ```bash
@@ -327,4 +371,6 @@ python -m pytest tests/ -v
 
 Tests run the whole pipeline against an in-memory store — no database needed.
 `tests/make_fixture.py` generates sample runs from `tests/sample_protos/`; pass
-`--protos <dir>` to generate from the real protos instead.
+`--protos <dir>` to generate from the real protos instead. `tests/test_analysis.py`
+covers Phase 1 on a fake database; the tests that need WrenAI are skipped when it is
+not installed.

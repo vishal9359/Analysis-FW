@@ -59,6 +59,7 @@ def build_fixture():
     the loader would never actually be given. Hash the protos instead.
     """
     h = hashlib.sha256()
+    h.update((HERE / "make_fixture.py").read_bytes())      # a generator change rebuilds too
     for p in sorted(PROTO_DIR.glob("*.proto")):
         h.update(p.name.encode())
         h.update(p.read_bytes())

@@ -118,10 +118,27 @@ message Payload {
     optional uint64 read_block_driver_time_ns  = 71;
     optional uint64 write_block_driver_time_ns = 72;
 
-    LatencyBuckets read_device_latency  = 73;
-    LatencyBuckets write_device_latency = 74;
-    LatencyBuckets read_driver_latency  = 75;
-    LatencyBuckets write_driver_latency = 76;
+    optional uint64 lat_option_us_1  = 73;
+    optional uint64 lat_option_us_2  = 74;
+    optional uint64 lat_option_us_3  = 75;
+    optional uint64 lat_option_us_4  = 76;
+    optional uint64 lat_option_us_5  = 77;
+    optional uint64 lat_option_us_6  = 78;
+    optional uint64 lat_option_us_7  = 79;
+    optional uint64 lat_option_us_8  = 80;
+    optional uint64 lat_option_us_9  = 81;
+    optional uint64 lat_option_us_10 = 82;
+    optional uint64 lat_option_us_11 = 83;
+    optional uint64 lat_option_us_12 = 84;
+    optional uint64 lat_option_us_13 = 85;
+    optional uint64 lat_option_us_14 = 86;
+    optional uint64 lat_option_us_15 = 87;
+    optional uint64 lat_option_us_16 = 88;
+
+    LatencyBuckets read_device_latency  = 89;
+    LatencyBuckets write_device_latency = 90;
+    LatencyBuckets read_driver_latency  = 91;
+    LatencyBuckets write_driver_latency = 92;
     }
 
     message LatencyBuckets {

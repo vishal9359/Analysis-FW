@@ -21,6 +21,6 @@ history. This is how "why is it like this?" stays answerable as the project grow
 
 Copy the shape of an existing one: **Status · Context · Decision · Consequences · References**.
 Number it next in sequence, add a row above, keep it short. **Check the other branches
-first** — `query` and `go_version` hold `0008`/`0009`, so a new ADR on `main` starts at
-`0010`; a number must mean one decision across every branch. If it changes an existing
+first** — `query` and `go_version` hold `0008`/`0009`, and `main` has `0010` and `0011`,
+so the next new ADR is `0012`; a number must mean one decision across every branch. If it changes an existing
 decision, set that one's status to `Superseded by NNNN`.

@@ -20,3 +20,6 @@ phase1_check_chart.html
 
 # real settings for tools/ - holds credentials; commit only config.example.json
 tools/config.json
+
+# records of Phase 1 requests (python -m analysis): generated per run
+out/

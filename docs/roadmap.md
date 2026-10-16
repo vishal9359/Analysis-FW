@@ -24,7 +24,7 @@ design). Boss-level activities (detailed plan:
    and two-lane design, as the bridge into POC 2
    ([ADR-0007](decisions/0007-streaming-transport-ladder.md)).
 
-## Present — the MVP (Module 1 offline loader)
+## Done — the MVP (Module 1 offline loader)
 
 **Status: built and in good shape** (this repo). Delivered:
 
@@ -37,6 +37,101 @@ design). Boss-level activities (detailed plan:
 
 Run/verify: see the [README](../README.md). Carries forward into production as the
 **replay / backfill / repair** path, not the primary path.
+
+## Now — Phase 1: plain-language request → Grafana graph
+
+**The status board for Phase 1 — keep it current.** What it must do:
+[goals-and-requirements.md](goals-and-requirements.md) (Phase 1). How:
+[phase1-design.md](phase1-design.md). Work is on branch **`phase1`** (pushed
+2026-10-16), not yet merged into `main`.
+
+### Done
+
+- **Requirements agreed** (2026-10-09): Goals A, B and C; pass mark 27 of 30 requests.
+- **Tools chosen** ([phase1-tool-research.md](phase1-tool-research.md)): WrenAI's
+  open-source core for the trial (Cube Core as the fallback); Grafana draws.
+- **Only our LLM** (decided 2026-10-10): the company LLM API, or an open-source model
+  run in the office. WrenAI contains no AI and sends no usage statistics — checked in
+  its source (wrenai 0.15.0, planner wren-core-py 0.8.0 and 0.8.1).
+- **Office box ready** (2026-10-10): LLM API with tool calling, ClickHouse, Grafana —
+  `tools/check_phase1_env.py`, `tools/check_llm.py`; results in
+  [phase1-tool-research.md](phase1-tool-research.md) §7.
+- **Design written:** [phase1-design.md](phase1-design.md) — who does what (ours ·
+  WrenAI · our LLM), request steps 0–7, per-run views, checks C1–C3, build order.
+- **Each run gets its own database** (2026-10-12) while Profile FW's protos keep
+  changing; the run's views live in it (2026-10-15). The team's `deploy.py` (outside
+  this repo) loads a run with `python -m src <run> --config <temp config>`.
+- **Measurement Catalog** for `linux_block_1_stats` (18 columns) and
+  `linux_block_2_misc` (196 columns), with the team's answers of 2026-10-12 and
+  2026-10-15: [knowledge/catalog/](../knowledge/catalog/), checked by
+  `python tools/catalog.py check`. The block_2 proto was fixed (`BiOpFlags`) and gained
+  the latency thresholds `lat_option_us_1` … `_16`.
+
+### Built, tested only on simulated runs (2026-10-15)
+
+- **`analysis/`** — step 0 (find the run's database, compare its columns with the
+  catalog), per-run views, per-run WrenAI data models, check C1 on WrenAI's SQL.
+  Commands: `python -m analysis check-run | prepare | plan | plan-file` (README,
+  "Phase 1").
+- **`tests/test_analysis.py`** — 16 tests on a fake database; no ClickHouse.
+- **What testing WrenAI showed** ([phase1-design.md](phase1-design.md) §6): strict mode
+  let a database-qualified name reach a raw table, so C1 checks every table of the
+  final SQL; `ref_sql` was dropped (WrenAI rewrote our ClickHouse SQL); WrenAI rewrites
+  some functions (`toStartOfMinute` → `dateTrunc('MINUTE', …)`), not yet confirmed on
+  ClickHouse.
+- **Never run against a real ClickHouse yet:** the view SQL and WrenAI's SQL have only
+  been parsed. The first dev machine has no ClickHouse.
+
+### Next, in order
+
+1. **On a machine with ClickHouse** (WSL2; README, "Phase 1"): load a simulated run into
+   a database of its own; run `check-run`, `prepare` (it must report "sum of changes =
+   last minus first"), and `plan … --execute`. Fix whatever ClickHouse rejects. Confirm
+   `dateTrunc('MINUTE', ts)` works.
+2. **On the office box**, with a real FIO run captured with the new protos: the same
+   commands; compare `plan --execute`'s numbers with the existing Grafana panel; run
+   `plan-file` under `strace -f -e trace=connect` — no connections expected.
+3. **Build step 4, the request runner** ([phase1-design.md](phase1-design.md) §7):
+   `request.yaml`; steps 1, 3 and 7 with our LLM (a new `analysis/llm.py`, built like
+   `tools/llm_config.py`); step 2's yes/no; step 5 with check C2; step 6, the Grafana
+   writer; check C3; a record per request in `out/<run>/`.
+4. **Test set and scoring:** 10 block-layer trial requests, answers from the exported
+   dashboards (below); then the trial decision: keep WrenAI, switch to Cube Core, or
+   plan ourselves.
+5. **Then:** catalog the NVMe, syscall and SSD tables (`tools/catalog.py skeleton`);
+   grow to the 30-request acceptance set.
+
+### Waiting on the team
+
+- **Catalog Q2** (`linux_block_2_misc`): are bio sizes counted before or after
+  splitting? The team is checking.
+- **E2:** the existing Grafana dashboards exported as JSON — the answer key.
+- **Optional:** review the draft catalog entries and set `status: confirmed`.
+- Real profile data stays on the office box: anything that needs it runs there, and
+  only the commands' output comes back.
+
+### Known issues and debts
+
+- Installing `wrenai` raises `urllib3` to ≥ 2.7, which clashes with a `kubernetes`
+  Python package if one is installed (seen on the first dev machine). Use a separate
+  virtual environment there.
+- Profile FW still counts a bio under 4 KiB twice (`read_lt_4kb` and
+  `read_lt_4kb_range`); they will remove one. The catalog explains how to avoid it.
+- [design.md](design.md) (the MVP loader design) is partly out of date: it mentions
+  `sut_id`, `CH_USER`/`CH_PASSWORD` and one job per `.pb` file. The code and the README
+  are right.
+- On `main`, `ClickHouseStore.count()` is dead code with a `sut_id` column that does not
+  exist (removed on the `query` branch).
+- Loading a run into a table made from an older proto fails as a database error
+  (exit 5), though the cause is the schema. One database per run avoids it.
+- Branches `query` and `go_version` stopped in August 2026 and lack the
+  repeated-inside-repeated support (ADR-0010).
+
+## Later — Phase 2: automated analysis reports
+
+Starts with automated FIO validation. Goals: [goals-and-requirements.md](goals-and-requirements.md)
+(Phase 2 and later); draft architecture: [analysis-architecture.md](analysis-architecture.md).
+It reuses Phase 1's catalog.
 
 ## Future — POC 2 (live streaming at scale)
 

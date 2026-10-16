@@ -116,3 +116,28 @@ block / blk-mq → NVMe driver → IRQ completion**.
 - **auto-rebalance** — ClickHouse OSS does **not** auto-rebalance shards; handled by a
   layered strategy (shard weights, loader-targeted writes, re-ingest from raw). See
   [ADR-0001](decisions/0001-database-clickhouse.md).
+
+## Phase 1 (plain-language request → graph)
+
+Design: [phase1-design.md](phase1-design.md).
+
+- **our LLM** — the only AI this project uses: the company LLM API today, an
+  open-source model running in the office later. Nothing on the LLM side from
+  outside the office.
+- **catalog** — our YAML files in `knowledge/catalog/`: what every column means, its
+  unit and kind, and metric formulas. Reviewed by engineers.
+- **counter / gauge** — a running total that only grows (use its change between
+  samples, never add up its samples) / a reading at the moment of sampling (use as
+  is, never subtract samples).
+- **per-interval view** — a view made for each run, in the run's own database
+  (`<table>_interval`), that turns each counter into its change since the previous
+  sample (`<column>_delta`), plus `interval_s`.
+- **setting** (catalog kind) — a value chosen when the profiler was started, the same
+  in every row of a run, such as a latency bucket threshold (`lat_option_us_1`).
+- **semantic layer** — software that holds what the data means (tables, columns,
+  metrics, joins) and turns a query written on those meanings into real SQL.
+- **WrenAI** — the open-source semantic layer used in the trial. **It contains no AI.**
+- **data model (WrenAI)** — WrenAI's word for the description of one table; *not* an
+  AI model. Our generator writes them from the catalog.
+- **`wren dry-plan`** — WrenAI's command that turns a query on the data models into
+  ClickHouse SQL, without running it, and rejects names that are not described.

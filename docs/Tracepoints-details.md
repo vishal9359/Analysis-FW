@@ -6,9 +6,15 @@ Every attach point below lives in `kernel/ebpf_tracer.c` (`SEC(...)` markers).
 ## Block layer
 | Collector | Attach type | Hook | Kernel event | What it captures |
 |---|---|---|---|---|
-| blk_bio_queue | `tp_btf` | `block_bio_queue` | bio submitted to queue | read/write bios, size buckets |
+| blk_bio_queue | `tp_btf` | `block_bio_queue` | bio submitted to queue | read/write bios, size buckets (aligned and unaligned), REQ_* flags (once per bio, at submission) |
 | blk_bio_queue | `tp_btf` | `block_split` | bio split into smaller bios | read/write splits |
+| blk_bio_queue | *not checked* | `block_bio_backmerge`, `block_bio_frontmerge` | bio merged onto the back / front of a queued request | read/write back and front merges |
+| blk_bio_queue | *not documented yet* | - | - | time in the driver layer only, time in the device only; driver and device latency buckets |
 | blk_dev_stats | *(no eBPF)* | reads `/sys/block/<dev>/stat` | - | ios, sectors, times, in-flight, busy |
+
+> The flags, merge, time and latency entries for `blk_bio_queue` come from the team's
+> answers (2026-10-15), not from reading `ebpf_tracer.c`. Details:
+> [knowledge/catalog/linux_block_2_misc.yaml](../knowledge/catalog/linux_block_2_misc.yaml), Q8 and Q9.
 
 ## NVMe layer
 | Collector | Attach type | Hook | Kernel event | What it captures |

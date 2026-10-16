@@ -1,0 +1,535 @@
+# =============================================================================
+#  Measurement Catalog - linux_block_2_misc
+# =============================================================================
+#  What every column of this table means. The analysis reads this instead of
+#  guessing from column names. How to review: knowledge/README.md. In short:
+#    status: todo       something is missing - fill in each TODO
+#    status: draft      pre-filled from documents and field names - please check
+#    status: confirmed  checked by an engineer - set this when you are done
+#  Answer the questions first: they decide how the data checks are written.
+#
+#  Written for: tests/sample_protos/linux_block_2_misc.proto
+#  Do not rename 'column' or 'columns' entries: they must match ClickHouse exactly.
+#  Check this file against the proto any time:  python tools/catalog.py check
+# =============================================================================
+
+table: linux_block_2_misc
+proto: linux_block_2_misc.proto
+schema_fingerprint: sha256:fe036da53392ef55
+collector: blk_bio_queue
+component: 101
+collected_from: 'eBPF: tp_btf/block_bio_queue (a bio is submitted: bio counts, sizes, REQ_* flags) and
+  tp_btf/block_split (a bio is split), per docs/Tracepoints-details.md; the back and front merges
+  at the kernel events block_bio_backmerge and block_bio_frontmerge (Q8). The hooks behind the
+  driver and device times and the latency buckets are not documented yet.'
+counts_since: profiler start
+sampling: 'Every -i seconds (default 1 s). The eBPF counters keep growing; each sample copies the
+  running totals (docs/Profile-code-flow.md: "snapshot, not reset"), so the change between two
+  samples is the activity in between.'
+device_filter: In the kernel, by disk name (config_map) - only the device given with -dev.
+observes: Bios as they enter the block layer, before merging, plus bio splits and merges, the
+  REQ_* flags bios carry, and the time I/Os spend in the driver and on the device. Bios are counted
+  once, when submitted (Q9), so a bio that is later merged or fails is still counted. Whether sizes
+  are counted before or after splitting is open (Q2).
+status: draft
+questions:
+- id: Q1
+  question: total_read_ios and read_bios are both read counts. How do they differ? Is total_read_ios
+    = read_bios + read_splits (the number of I/Os after splitting)?
+  answer: 'They are the same count: total_read_ios = read_bios and total_write_ios = write_bios.
+    (Team, 2026-10-12)'
+- id: Q2
+  question: Are bios counted by size once, when submitted (before splitting), or are the pieces
+    counted after splitting? The same question applies to cumulative_*_io_size_bytes.
+  answer: TODO
+  note: The team is checking (2026-10-15).
+- id: Q3
+  question: Is read_unaligned equal to the sum of the twelve read_*_range columns? If so, the
+    check 'exact sizes + unaligned = total' must add read_unaligned or the ranges, never both.
+  answer: 'Yes: read_unaligned = read_lt_4kb_range + ... + read_4mto8m_range. "Ideally": a small
+    difference is possible, so a data check reports it as a warning, not an error. (Team,
+    2026-10-12 and 2026-10-15)'
+- id: Q4
+  question: 'Which total should the size buckets add up to: read_bios or total_read_ios?'
+  answer: 'read_bios, which equals total_read_ios. (Team, 2026-10-12) The sum is corrected by Q15:
+    read_lt_4kb is left out, because those bios are also in read_unaligned.'
+- id: Q5
+  question: read_lt_4kb and read_lt_4kb_range both mean 'smaller than 4 KiB'. What goes in each?
+    What is an exact size below 4 KiB (512 bytes, 1 KiB, 2 KiB)?
+  answer: 'Both count every bio smaller than 4 KiB, so they hold the same number: read_lt_4kb in the
+    aligned sizes, read_lt_4kb_range in the unaligned ones. A known double count - Profile FW will
+    remove one of the two later. (Team, 2026-10-12 and 2026-10-15)'
+- id: Q6
+  question: 'Are the sizes powers of two: 4kb = 4,096 bytes and 1mb = 1,048,576 bytes?'
+  answer: Yes. (Team, 2026-10-12)
+- id: Q7
+  question: 'Where does a bio larger than 8 MiB go: read_gt_8mb always, or read_unaligned when
+    its size is not a power of two?'
+  answer: 'Always read_gt_8mb: it counts every bio larger than 8 MiB, aligned or not. read_unaligned
+    counts only the unaligned bios larger than 0 and smaller than 8 MiB - those in the twelve
+    ranges. (Team, 2026-10-15)'
+- id: Q8
+  question: 'Which kernel event does each newer field count? Our guesses: the back and front merges
+    are the tracepoints block_bio_backmerge and block_bio_frontmerge (a bio is added to the end, or
+    the start, of a request already waiting); block driver time runs from a bio''s submission
+    (block_bio_queue) until its request is sent to the device (block_rq_issue); device time runs
+    from block_rq_issue until the device completes the request (block_rq_complete). The same two
+    times decide the driver and device latency buckets. Please ask Profile FW to confirm or correct
+    each.'
+  answer: 'Merges: counted at the kernel events block_bio_backmerge and block_bio_frontmerge. Driver
+    time: the time spent in the driver layer only. Device time: the time spent in the device only.
+    Our guesses for the two times were wrong - block-layer time is in neither. The latency buckets
+    are separate fields from the time totals (independent, peers in the proto). (Team, 2026-10-15)'
+  note: Reworded on 2026-10-12 - the first wording was unclear.
+- id: Q9
+  question: Are the *_io_flags_* columns counted once per bio, at submission? A bio can carry
+    several flags, so we expect the flag columns NOT to add up to the bio count - correct?
+  answer: 'Yes: once per bio, at submission, so the flag columns do not add up to the bio count.
+    (Team, 2026-10-15)'
+- id: Q10
+  question: 'read_device_time_ns and read_block_driver_time_ns: exactly which intervals do they
+    measure (for example driver = from bio submission to request issue, device = from issue to
+    completion)? Are they added up over all requests?'
+  answer: 'Added up over all requests. Like every field here, they are running totals since the
+    profiler started, sampled every -i seconds. (Team, 2026-10-12) What they measure: see Q8.'
+- id: Q11
+  question: 'Latency buckets: what are the thresholds opt1 to opt16 - values and unit? Are they
+    fixed, or set per run - and if per run, where are they recorded? Without them the latency
+    histograms cannot be read.'
+  answer: 'Set per run by the user, in microseconds: for example profile_fw -lat-buckets 1,10,100,1000.
+    Up to 16 thresholds, so up to 17 buckets. Every row stores them in lat_option_us_1 to
+    lat_option_us_16; there is one set, so the same thresholds apply to all four latency
+    histograms. (Team, 2026-10-12)'
+- id: Q12
+  question: 'Latency bucket names: does ''lh'' in latency_lh_opt1 mean ''lower than''? Does ''bw''
+    mean ''between'', and is each lower bound included?'
+  answer: 'Yes: lh = lower than, bw = between, and each lower bound is included. (Team, 2026-10-12)'
+- id: Q13
+  question: Is each request counted in exactly one latency bucket, so the 17 buckets add up to
+    the number of completed requests?
+  answer: 'Yes, ideally. A small difference is possible, so a data check reports it as a warning.
+    (Team, 2026-10-12)'
+- id: Q14
+  question: 'The proto as received did not compile: read_io_flags and write_io_flags used the
+    type ''BiOpfFlags'', while the message is named ''BioOpFlags''. Our copy now uses BioOpFlags.
+    Please confirm Profile FW''s own file matches.'
+  answer: 'The correct name is BiOpFlags. Our copy now uses it for the message and for both fields.
+    (Team, 2026-10-12)'
+- id: Q15
+  question: 'The answers to Q3, Q4 and Q5 count a bio smaller than 4 KiB twice: it is in read_lt_4kb,
+    an exact size (Q4), and also in read_lt_4kb_range (Q5), which is part of read_unaligned (Q3).
+    So "exact sizes + read_unaligned = read_bios" cannot hold when there are bios under 4 KiB.
+    Which should change: read_unaligned leaves out read_lt_4kb_range; or read_lt_4kb is not counted
+    as an exact size; or something else?'
+  answer: 'There are two ways of sorting sizes: aligned (read_lt_4kb, read_4kb ... read_8mb,
+    read_gt_8mb) and unaligned (the twelve ranges, which add up to read_unaligned). A bio under
+    4 KiB is counted in both - read_lt_4kb and read_lt_4kb_range - a double count Profile FW will
+    remove later. (Team, 2026-10-15) So, without counting any bio twice: read_bios = read_4kb +
+    ... + read_8mb + read_gt_8mb + read_unaligned. (Derived from the answers - to be confirmed on
+    the first real run.)'
+- id: Q16
+  question: 'With fewer than 16 thresholds - for example -lat-buckets 1,10,100,1000, which gives
+    5 ranges: below 1, 1-10, 10-100, 100-1000 and above 1000 microseconds - where are requests above
+    the last threshold counted: in latency_bw_opt4_and_opt5, or in latency_overflow? And what do the
+    unused lat_option_us_5 to lat_option_us_16 hold: 0?'
+  answer: 'Four thresholds give five ranges - below 1, 1-10, 10-100, 100-1000 and above 1000
+    microseconds - and the last range is counted in latency_overflow. Unused thresholds are 0.
+    (Team, 2026-10-15) So the buckets past the last threshold given (here latency_bw_opt4_and_opt5
+    and later) stay 0 - our reading.'
+- id: Q17
+  question: 'An average time per I/O needs a count to divide read_device_time_ns (or
+    read_block_driver_time_ns) by. Which is right: the completed requests - the sum of the read
+    device latency buckets - or read_bios?'
+  answer: 'The times are added up per I/O, and every layer is sampled each second. (Team, 2026-10-15)
+    An I/O here is a bio (total_read_ios = read_bios, Q1), so the average time per I/O in an
+    interval is the change in read_device_time_ns divided by the change in total_read_ios - our
+    reading of the answer.'
+tables:
+- table: linux_block_2_misc
+  columns:
+  - column: read_splits
+    type: UInt64
+    meaning: Read bios that the block layer split into smaller bios.
+    unit: count
+    kind: counter
+    status: draft
+    basis: 'docs/Tracepoints-details.md: block_split'
+  - column: write_splits
+    type: UInt64
+    meaning: Write bios that the block layer split into smaller bios.
+    unit: count
+    kind: counter
+    status: draft
+    basis: 'docs/Tracepoints-details.md: block_split'
+  - column: read_bio_back_merges
+    type: UInt64
+    meaning: Read bios merged onto the back of a request already queued.
+    unit: count
+    kind: counter
+    status: draft
+    basis: kernel event block_bio_backmerge - team answer to Q8 (2026-10-15)
+  - column: write_bio_back_merges
+    type: UInt64
+    meaning: Write bios merged onto the back of a request already queued.
+    unit: count
+    kind: counter
+    status: draft
+    basis: kernel event block_bio_backmerge - team answer to Q8 (2026-10-15)
+  - column: read_bio_front_merges
+    type: UInt64
+    meaning: Read bios merged onto the front of a request already queued.
+    unit: count
+    kind: counter
+    status: draft
+    basis: kernel event block_bio_frontmerge - team answer to Q8 (2026-10-15)
+  - column: write_bio_front_merges
+    type: UInt64
+    meaning: Write bios merged onto the front of a request already queued.
+    unit: count
+    kind: counter
+    status: draft
+    basis: kernel event block_bio_frontmerge - team answer to Q8 (2026-10-15)
+  - column: read_unaligned
+    type: UInt64
+    meaning: Read bios smaller than 8 MiB whose size is not exactly one of the aligned sizes -
+      including every bio under 4 KiB. Equals the sum of the twelve read size ranges (Q3). Bios
+      over 8 MiB are in read_gt_8mb instead (Q7).
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answers to Q3, Q7 and Q15
+    note: Counted before or after splitting? See Q2.
+  - column: write_unaligned
+    type: UInt64
+    meaning: Write bios smaller than 8 MiB whose size is not exactly one of the aligned sizes -
+      including every bio under 4 KiB. Equals the sum of the twelve write size ranges (Q3). Bios
+      over 8 MiB are in write_gt_8mb instead (Q7).
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answers to Q3, Q7 and Q15
+    note: Counted before or after splitting? See Q2.
+  - column: read_bios
+    type: UInt64
+    meaning: Read bios submitted to the block layer. total_read_ios holds the same count (Q1).
+    unit: count
+    kind: counter
+    status: draft
+    basis: 'docs/Tracepoints-details.md: block_bio_queue; team answer to Q1'
+  - column: write_bios
+    type: UInt64
+    meaning: Write bios submitted to the block layer. total_write_ios holds the same count (Q1).
+    unit: count
+    kind: counter
+    status: draft
+    basis: 'docs/Tracepoints-details.md: block_bio_queue; team answer to Q1'
+  - column: total_read_ios
+    type: UInt64
+    meaning: Read bios submitted to the block layer - the same count as read_bios (Q1).
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answer to Q1 (2026-10-12)
+  - column: total_write_ios
+    type: UInt64
+    meaning: Write bios submitted to the block layer - the same count as write_bios (Q1).
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answer to Q1 (2026-10-12)
+  - column: cumulative_read_io_size_bytes
+    type: UInt64
+    meaning: Total bytes of the read bios submitted.
+    unit: bytes
+    kind: counter
+    status: draft
+    basis: field name
+    note: Counted before or after splitting? See Q2.
+  - column: cumulative_write_io_size_bytes
+    type: UInt64
+    meaning: Total bytes of the write bios submitted.
+    unit: bytes
+    kind: counter
+    status: draft
+    basis: field name
+    note: Counted before or after splitting? See Q2.
+  - column: read_device_time_ns
+    type: UInt64
+    meaning: Time read I/Os spent in the device only - not in the block layer or the driver - added
+      up over all requests.
+    unit: ns
+    kind: counter
+    status: draft
+    basis: team answers to Q8 and Q10 (2026-10-15)
+    note: Average per I/O - see Q17.
+  - column: write_device_time_ns
+    type: UInt64
+    meaning: Time write I/Os spent in the device only - not in the block layer or the driver - added
+      up over all requests.
+    unit: ns
+    kind: counter
+    status: draft
+    basis: team answers to Q8 and Q10 (2026-10-15)
+    note: Average per I/O - see Q17.
+  - column: read_block_driver_time_ns
+    type: UInt64
+    meaning: Time read I/Os spent in the driver layer only - not in the block layer or the device -
+      added up over all requests.
+    unit: ns
+    kind: counter
+    status: draft
+    basis: team answers to Q8 and Q10 (2026-10-15)
+    note: Average per I/O - see Q17.
+  - column: write_block_driver_time_ns
+    type: UInt64
+    meaning: Time write I/Os spent in the driver layer only - not in the block layer or the device -
+      added up over all requests.
+    unit: ns
+    kind: counter
+    status: draft
+    basis: team answers to Q8 and Q10 (2026-10-15)
+    note: Average per I/O - see Q17.
+  groups:
+  - group: 'Read size buckets: aligned sizes'
+    columns: [read_lt_4kb, read_4kb, read_8kb, read_16kb, read_32kb, read_64kb, read_128kb, read_256kb,
+      read_512kb, read_1mb, read_2mb, read_4mb, read_8mb, read_gt_8mb]
+    type: UInt64
+    meaning: 'Read bios counted by aligned size. read_4kb to read_8mb count bios of exactly that
+      size, a power of two: read_4kb = exactly 4 KiB (4,096 bytes), read_1mb = exactly 1 MiB
+      (1,048,576 bytes). read_lt_4kb = every bio smaller than 4 KiB - the same bios as
+      read_lt_4kb_range (Q5). read_gt_8mb = every bio larger than 8 MiB, aligned or not (Q7).
+      read_4kb to read_8mb, plus read_gt_8mb, plus read_unaligned, add up to read_bios (Q15).'
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answers to Q4 to Q7 and Q15
+    note: 'For one size distribution that counts no bio twice, use read_lt_4kb, read_4kb to
+      read_8mb, read_gt_8mb, and the ranges from read_4kto8k_range up - leave out
+      read_lt_4kb_range. Counted before or after splitting? See Q2.'
+  - group: 'Read size ranges: unaligned sizes'
+    columns: [read_lt_4kb_range, read_4kto8k_range, read_8kto16k_range, read_16kto32k_range, read_32kto64k_range,
+      read_64kto128k_range, read_128kto256k_range, read_256kto512k_range, read_512kto1m_range,
+      read_1mto2m_range, read_2mto4m_range, read_4mto8m_range]
+    type: UInt64
+    meaning: 'Read bios whose size is not exactly one of the aligned sizes, counted by range:
+      read_4kto8k_range = larger than 4 KiB and smaller than 8 KiB. read_lt_4kb_range = every bio
+      smaller than 4 KiB - the same bios as read_lt_4kb (Q5). Bios larger than 8 MiB are not here
+      but in read_gt_8mb (Q7). Together these equal read_unaligned (Q3).'
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answers to Q3, Q5, Q7 and Q15
+    note: Counted before or after splitting? See Q2.
+  - group: Read bio flags
+    columns: [read_io_flags_req_fail_fast_dev, read_io_flags_req_fail_fast_transport, read_io_flags_req_fail_fast_driver,
+      read_io_flags_req_sync, read_io_flags_req_meta, read_io_flags_req_prio, read_io_flags_req_nomerge,
+      read_io_flags_req_idle, read_io_flags_req_integrity, read_io_flags_req_fua, read_io_flags_req_preflush,
+      read_io_flags_req_rahead, read_io_flags_req_background, read_io_flags_req_nowait, read_io_flags_req_polled,
+      read_io_flags_req_alloc_cache, read_io_flags_req_swap, read_io_flags_req_drv, read_io_flags_req_fs_private,
+      read_io_flags_req_atomic, read_io_flags_req_nounmap]
+    type: UInt64
+    meaning: 'Read bios with the matching kernel REQ_* flag set, counted once per bio when it is
+      submitted (Q9): read_io_flags_req_sync = REQ_SYNC, read_io_flags_req_fua = REQ_FUA (force
+      unit access), read_io_flags_req_rahead = REQ_RAHEAD (readahead), read_io_flags_req_preflush
+      = REQ_PREFLUSH. A bio can carry several flags, so these columns do not add up to the bio
+      count.'
+    unit: count
+    kind: counter
+    status: draft
+    basis: Linux kernel include/linux/blk_types.h (REQ_* flags); team answer to Q9 (2026-10-15)
+  - group: Latency bucket thresholds
+    columns: [lat_option_us_1, lat_option_us_2, lat_option_us_3, lat_option_us_4, lat_option_us_5,
+      lat_option_us_6, lat_option_us_7, lat_option_us_8, lat_option_us_9, lat_option_us_10, lat_option_us_11,
+      lat_option_us_12, lat_option_us_13, lat_option_us_14, lat_option_us_15, lat_option_us_16]
+    type: UInt64
+    meaning: 'The latency bucket thresholds given with -lat-buckets when the profiler was started,
+      smallest first: lat_option_us_1 is the first threshold. They label the four latency histograms
+      below: with -lat-buckets 1,10,100,1000, latency_lh_opt1 = below 1 microsecond and
+      latency_bw_opt1_and_opt2 = 1 to 10 microseconds. Unused thresholds are 0 (Q16). Set once per
+      run, so every row of a run holds the same values (assumed).'
+    unit: microseconds
+    kind: setting
+    status: draft
+    basis: team answers to Q11 and Q16
+  - group: Read device latency buckets
+    columns: [read_device_latency_latency_lh_opt1, read_device_latency_latency_bw_opt1_and_opt2,
+      read_device_latency_latency_bw_opt2_and_opt3, read_device_latency_latency_bw_opt3_and_opt4,
+      read_device_latency_latency_bw_opt4_and_opt5, read_device_latency_latency_bw_opt5_and_opt6,
+      read_device_latency_latency_bw_opt6_and_opt7, read_device_latency_latency_bw_opt7_and_opt8,
+      read_device_latency_latency_bw_opt8_and_opt9, read_device_latency_latency_bw_opt9_and_opt10,
+      read_device_latency_latency_bw_opt10_and_opt11, read_device_latency_latency_bw_opt11_and_opt12,
+      read_device_latency_latency_bw_opt12_and_opt13, read_device_latency_latency_bw_opt13_and_opt14,
+      read_device_latency_latency_bw_opt14_and_opt15, read_device_latency_latency_bw_opt15_and_opt16,
+      read_device_latency_latency_overflow]
+    type: UInt64
+    meaning: 'Read requests counted by their latency in the device. The thresholds are
+      lat_option_us_1 to lat_option_us_16, in microseconds: lh_opt1 = below lat_option_us_1;
+      bw_optN_and_optM = from lat_option_us_N (included) up to lat_option_us_M; overflow = from
+      the last threshold given up, and the buckets past it stay 0 (Q16). Each request is counted in one bucket, so together they count the
+      completed reads (Q13). Collected separately from read_device_time_ns (Q8).'
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answers to Q8 and Q11 to Q13; field names
+    note: Fewer than 16 thresholds - see Q16.
+  - group: Read driver latency buckets
+    columns: [read_driver_latency_latency_lh_opt1, read_driver_latency_latency_bw_opt1_and_opt2,
+      read_driver_latency_latency_bw_opt2_and_opt3, read_driver_latency_latency_bw_opt3_and_opt4,
+      read_driver_latency_latency_bw_opt4_and_opt5, read_driver_latency_latency_bw_opt5_and_opt6,
+      read_driver_latency_latency_bw_opt6_and_opt7, read_driver_latency_latency_bw_opt7_and_opt8,
+      read_driver_latency_latency_bw_opt8_and_opt9, read_driver_latency_latency_bw_opt9_and_opt10,
+      read_driver_latency_latency_bw_opt10_and_opt11, read_driver_latency_latency_bw_opt11_and_opt12,
+      read_driver_latency_latency_bw_opt12_and_opt13, read_driver_latency_latency_bw_opt13_and_opt14,
+      read_driver_latency_latency_bw_opt14_and_opt15, read_driver_latency_latency_bw_opt15_and_opt16,
+      read_driver_latency_latency_overflow]
+    type: UInt64
+    meaning: 'Read requests counted by their latency in the driver layer. The thresholds are
+      lat_option_us_1 to lat_option_us_16, in microseconds: lh_opt1 = below lat_option_us_1;
+      bw_optN_and_optM = from lat_option_us_N (included) up to lat_option_us_M; overflow = from
+      the last threshold given up, and the buckets past it stay 0 (Q16). Each request is counted in one bucket, so together they count the
+      completed reads (Q13). Collected separately from read_block_driver_time_ns (Q8).'
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answers to Q8 and Q11 to Q13; field names
+    note: Fewer than 16 thresholds - see Q16.
+  - group: 'Write size buckets: aligned sizes'
+    columns: [write_lt_4kb, write_4kb, write_8kb, write_16kb, write_32kb, write_64kb, write_128kb,
+      write_256kb, write_512kb, write_1mb, write_2mb, write_4mb, write_8mb, write_gt_8mb]
+    type: UInt64
+    meaning: 'Write bios counted by aligned size. write_4kb to write_8mb count bios of exactly that
+      size, a power of two: write_4kb = exactly 4 KiB (4,096 bytes), write_1mb = exactly 1 MiB
+      (1,048,576 bytes). write_lt_4kb = every bio smaller than 4 KiB - the same bios as
+      write_lt_4kb_range (Q5). write_gt_8mb = every bio larger than 8 MiB, aligned or not (Q7).
+      write_4kb to write_8mb, plus write_gt_8mb, plus write_unaligned, add up to write_bios (Q15).'
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answers to Q4 to Q7 and Q15
+    note: 'For one size distribution that counts no bio twice, use write_lt_4kb, write_4kb to
+      write_8mb, write_gt_8mb, and the ranges from write_4kto8k_range up - leave out
+      write_lt_4kb_range. Counted before or after splitting? See Q2.'
+  - group: 'Write size ranges: unaligned sizes'
+    columns: [write_lt_4kb_range, write_4kto8k_range, write_8kto16k_range, write_16kto32k_range,
+      write_32kto64k_range, write_64kto128k_range, write_128kto256k_range, write_256kto512k_range,
+      write_512kto1m_range, write_1mto2m_range, write_2mto4m_range, write_4mto8m_range]
+    type: UInt64
+    meaning: 'Write bios whose size is not exactly one of the aligned sizes, counted by range:
+      write_4kto8k_range = larger than 4 KiB and smaller than 8 KiB. write_lt_4kb_range = every
+      bio smaller than 4 KiB - the same bios as write_lt_4kb (Q5). Bios larger than 8 MiB are not
+      here but in write_gt_8mb (Q7). Together these equal write_unaligned (Q3).'
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answers to Q3, Q5, Q7 and Q15
+    note: Counted before or after splitting? See Q2.
+  - group: Write bio flags
+    columns: [write_io_flags_req_fail_fast_dev, write_io_flags_req_fail_fast_transport, write_io_flags_req_fail_fast_driver,
+      write_io_flags_req_sync, write_io_flags_req_meta, write_io_flags_req_prio, write_io_flags_req_nomerge,
+      write_io_flags_req_idle, write_io_flags_req_integrity, write_io_flags_req_fua, write_io_flags_req_preflush,
+      write_io_flags_req_rahead, write_io_flags_req_background, write_io_flags_req_nowait, write_io_flags_req_polled,
+      write_io_flags_req_alloc_cache, write_io_flags_req_swap, write_io_flags_req_drv, write_io_flags_req_fs_private,
+      write_io_flags_req_atomic, write_io_flags_req_nounmap]
+    type: UInt64
+    meaning: 'Write bios with the matching kernel REQ_* flag set, counted once per bio when it is
+      submitted (Q9): write_io_flags_req_sync = REQ_SYNC, write_io_flags_req_fua = REQ_FUA (force
+      unit access), write_io_flags_req_rahead = REQ_RAHEAD (readahead), write_io_flags_req_preflush
+      = REQ_PREFLUSH. A bio can carry several flags, so these columns do not add up to the bio
+      count.'
+    unit: count
+    kind: counter
+    status: draft
+    basis: Linux kernel include/linux/blk_types.h (REQ_* flags); team answer to Q9 (2026-10-15)
+  - group: Write device latency buckets
+    columns: [write_device_latency_latency_lh_opt1, write_device_latency_latency_bw_opt1_and_opt2,
+      write_device_latency_latency_bw_opt2_and_opt3, write_device_latency_latency_bw_opt3_and_opt4,
+      write_device_latency_latency_bw_opt4_and_opt5, write_device_latency_latency_bw_opt5_and_opt6,
+      write_device_latency_latency_bw_opt6_and_opt7, write_device_latency_latency_bw_opt7_and_opt8,
+      write_device_latency_latency_bw_opt8_and_opt9, write_device_latency_latency_bw_opt9_and_opt10,
+      write_device_latency_latency_bw_opt10_and_opt11, write_device_latency_latency_bw_opt11_and_opt12,
+      write_device_latency_latency_bw_opt12_and_opt13, write_device_latency_latency_bw_opt13_and_opt14,
+      write_device_latency_latency_bw_opt14_and_opt15, write_device_latency_latency_bw_opt15_and_opt16,
+      write_device_latency_latency_overflow]
+    type: UInt64
+    meaning: 'Write requests counted by their latency in the device. The thresholds are
+      lat_option_us_1 to lat_option_us_16, in microseconds: lh_opt1 = below lat_option_us_1;
+      bw_optN_and_optM = from lat_option_us_N (included) up to lat_option_us_M; overflow = from
+      the last threshold given up, and the buckets past it stay 0 (Q16). Each request is counted in one bucket, so together they count the
+      completed writes (Q13). Collected separately from write_device_time_ns (Q8).'
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answers to Q8 and Q11 to Q13; field names
+    note: Fewer than 16 thresholds - see Q16.
+  - group: Write driver latency buckets
+    columns: [write_driver_latency_latency_lh_opt1, write_driver_latency_latency_bw_opt1_and_opt2,
+      write_driver_latency_latency_bw_opt2_and_opt3, write_driver_latency_latency_bw_opt3_and_opt4,
+      write_driver_latency_latency_bw_opt4_and_opt5, write_driver_latency_latency_bw_opt5_and_opt6,
+      write_driver_latency_latency_bw_opt6_and_opt7, write_driver_latency_latency_bw_opt7_and_opt8,
+      write_driver_latency_latency_bw_opt8_and_opt9, write_driver_latency_latency_bw_opt9_and_opt10,
+      write_driver_latency_latency_bw_opt10_and_opt11, write_driver_latency_latency_bw_opt11_and_opt12,
+      write_driver_latency_latency_bw_opt12_and_opt13, write_driver_latency_latency_bw_opt13_and_opt14,
+      write_driver_latency_latency_bw_opt14_and_opt15, write_driver_latency_latency_bw_opt15_and_opt16,
+      write_driver_latency_latency_overflow]
+    type: UInt64
+    meaning: 'Write requests counted by their latency in the driver layer. The thresholds are
+      lat_option_us_1 to lat_option_us_16, in microseconds: lh_opt1 = below lat_option_us_1;
+      bw_optN_and_optM = from lat_option_us_N (included) up to lat_option_us_M; overflow = from
+      the last threshold given up, and the buckets past it stay 0 (Q16). Each request is counted in one bucket, so together they count the
+      completed writes (Q13). Collected separately from write_block_driver_time_ns (Q8).'
+    unit: count
+    kind: counter
+    status: draft
+    basis: team answers to Q8 and Q11 to Q13; field names
+    note: Fewer than 16 thresholds - see Q16.
+metrics:
+- metric: read_split_share_pct
+  meaning: Share of read bios that were split.
+  formula: read_splits_delta / nullIf(read_bios_delta, 0) * 100
+  unit: percent
+  status: draft
+- metric: write_split_share_pct
+  meaning: Share of write bios that were split.
+  formula: write_splits_delta / nullIf(write_bios_delta, 0) * 100
+  unit: percent
+  status: draft
+- metric: avg_read_bio_size_kib
+  meaning: Average size of a read bio when submitted.
+  formula: cumulative_read_io_size_bytes_delta / 1024 / nullIf(read_bios_delta, 0)
+  unit: KiB
+  status: draft
+  note: Depends on Q2.
+- metric: avg_write_bio_size_kib
+  meaning: Average size of a write bio when submitted.
+  formula: cumulative_write_io_size_bytes_delta / 1024 / nullIf(write_bios_delta, 0)
+  unit: KiB
+  status: draft
+  note: Depends on Q2.
+- metric: avg_read_device_time_us
+  meaning: Average time a read I/O spent in the device, over the interval. Empty when there were no
+    reads.
+  formula: read_device_time_ns_delta / 1000 / nullIf(total_read_ios_delta, 0)
+  unit: microseconds
+  status: draft
+  note: Per I/O, an I/O being a bio (Q17).
+- metric: avg_write_device_time_us
+  meaning: Average time a write I/O spent in the device, over the interval. Empty when there were
+    no writes.
+  formula: write_device_time_ns_delta / 1000 / nullIf(total_write_ios_delta, 0)
+  unit: microseconds
+  status: draft
+  note: Per I/O, an I/O being a bio (Q17).
+- metric: avg_read_driver_time_us
+  meaning: Average time a read I/O spent in the driver layer, over the interval. Empty when there
+    were no reads.
+  formula: read_block_driver_time_ns_delta / 1000 / nullIf(total_read_ios_delta, 0)
+  unit: microseconds
+  status: draft
+  note: Per I/O, an I/O being a bio (Q17).
+- metric: avg_write_driver_time_us
+  meaning: Average time a write I/O spent in the driver layer, over the interval. Empty when there
+    were no writes.
+  formula: write_block_driver_time_ns_delta / 1000 / nullIf(total_write_ios_delta, 0)
+  unit: microseconds
+  status: draft
+  note: Per I/O, an I/O being a bio (Q17).

@@ -75,6 +75,7 @@ Installed by the command above:
 | `grpcio-tools` | bundles `protoc`, used to compile the run's `.proto` files |
 | `PyYAML` | reads the config file |
 | `clickhouse-connect` | talks to ClickHouse |
+| `wrenai` | only for Phase 1's `python -m analysis`, still in development — it contains no AI |
 | `pytest` | only for the self-check below |
 
 ### Verify the install
@@ -455,5 +456,6 @@ summary JSON.
 | Timestamp formats | [docs/timestamp-format.md](docs/timestamp-format.md) |
 | Terminology | [docs/glossary.md](docs/glossary.md) |
 | Contributing / internals | [docs/development.md](docs/development.md) |
+| Phase 1, in development: plain-language request to graph | [docs/development.md](docs/development.md), "Phase 1" |
 
 Issues: https://github.com/vishal9359/Analysis-FW/issues
