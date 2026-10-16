@@ -51,18 +51,25 @@ Example requests:
   values look the way they do.
 - **Confirmed request-and-query pairs may be kept as examples** to guide later
   requests.
-- **The LLM is the company's deployed, OpenAI-compatible LLM API**, reachable
-  from the office box, with roughly 128k tokens of context. Whether it supports
-  tool (function) calling is not known yet, so **the design must not depend on
-  it**. Its configuration is provided when implementation starts.
+- **Only our own LLMs — nothing on the LLM side from outside the office.** Every AI
+  call goes to the company's deployed, OpenAI-compatible LLM API (reachable from
+  the office box, roughly 128k tokens of context), or later to an open-source model
+  running in the office. A tool we adopt must not call an AI service of its own; a
+  part that needs one is not used. (WrenAI contains no AI: its "models" are table
+  descriptions.) Open-source model weights may be downloaded from outside, to run in
+  the office (decided 2026-10-12). Tool calling works on the LLM API (checked
+  2026-10-10), but the design does not depend on it.
 - **Grafana stays the drawing layer:** the latest Grafana container, with the
   ClickHouse plugin already installed, reached through its REST API or its MCP
   server. **Graphs go into one Grafana folder per run.** The trial draws in Grafana
   (decided 2026-10-10). WrenAI's own chart generation (GenBI) may be tried later,
   using the team's own coding-agent API. See
   [phase1-tool-research.md](phase1-tool-research.md), section 4.
-- **Our ClickHouse objects live in a separate database, `analysis_fw`**, reading from
-  `profile_fw`, so the loader's database stays untouched.
+- **Each run is loaded into a database of its own** (decided 2026-10-12), for as long
+  as Profile FW's protos keep changing.
+- **Our per-interval views live in each run's own database**, next to the loader's
+  tables (decided 2026-10-15). This replaces the earlier plan of a separate database,
+  `analysis_fw`, made when all runs shared `profile_fw`.
 - **Licences:** Apache-2.0 and MIT are acceptable. AGPL has not been approved.
 - **Existing open-source or free tools are preferred** over building from
   scratch. See [phase1-tool-research.md](phase1-tool-research.md).
@@ -137,7 +144,7 @@ an engineer.
 All earlier questions are answered. What remains are small actions:
 
 1. **A Grafana service-account token** for the system, instead of the admin password. Created once, by an admin, in Grafana under *Administration → Users and access → Service accounts*, with the Editor role.
-2. **Check whether the LLM API supports tool calling**, as the first step once its configuration is available. Nothing depends on the answer, but it decides how the requests to the LLM are written.
+2. ~~Check whether the LLM API supports tool calling.~~ **Done (2026-10-10): it does** — see [phase1-tool-research.md](phase1-tool-research.md), section 7.
 3. **Export the existing Grafana dashboards as JSON** (*Share → Export*). One file per dashboard gives both the answer key for C5 and the SQL behind every panel.
 4. *Suggested:* **pin the Grafana version** in the container instead of `latest`, so the dashboard format does not change underneath the system after an update.
 

@@ -49,8 +49,8 @@ TAG = "test1"
 # Per-second increments for known /proc/diskstats counters, chosen so the
 # derived metrics are realistic: ~2 ms/read, ~3 ms/write, ~8 sectors (4 KiB)/IO.
 _COUNTER_STEP = {
-    "read_ios": 200, "write_ios": 600,
-    "sectors_read": 1600, "sectors_written": 4800,
+    "read_io_count": 200, "write_io_count": 600,
+    "read_sectors_512b": 1600, "write_sectors_512b": 4800,
     "read_time_ms": 400, "write_time_ms": 1800,
 }
 
@@ -70,7 +70,7 @@ def _iso(gi: int) -> str:
 def _counter_value(field, gi: int) -> int:
     """A monotonically-increasing cumulative counter: linear + a gentle ramp so
     per-second deltas rise over the run. The ramp cancels in latency ratios
-    (read_time/read_ios), so latency stays ~constant while IOPS/bandwidth climb."""
+    (read_time_ms/read_io_count), so latency stays ~constant while IOPS/bandwidth climb."""
     step = _COUNTER_STEP.get(field.name, (field.number + 1) * 50)
     return step * gi + step * gi * gi // 2000
 

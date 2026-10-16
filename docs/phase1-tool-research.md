@@ -13,6 +13,13 @@ area was archived this year — so re-check before committing.
 > `wren genbi`, with an AI coding agent writing the dashboard app. What is paid is
 > Wren's own UI and its built-in app-building harness. Sections 3 and 4 are updated.
 
+> **"Model" in WrenAI means a data model, not an AI model (2026-10-10).** WrenAI
+> calls its table descriptions *models*: what a table is, what its columns mean,
+> which metrics are calculated from them. **WrenAI contains no AI** and never calls
+> an LLM. In this project every AI call goes to **our own LLM only** — the company
+> LLM API, or later an open-source model running in the office. Who does what is
+> set out in [phase1-design.md](phase1-design.md), section 1.
+
 ---
 
 ## 1. What we need from a tool
@@ -20,7 +27,9 @@ area was archived this year — so re-check before committing.
 1. **Hold our meanings** — tables, columns, relationships, calculation rules and
    confirmed examples (Goal B). This is the most important point.
 2. **Work with ClickHouse.**
-3. **Use our own deployed LLM API.**
+3. **Use only our own LLM** — the company's deployed LLM API, or an open-source
+   model running in the office. Nothing on the LLM side may come from outside the
+   office.
 4. **Produce real ClickHouse SQL**, because a Grafana panel needs a query it can
    run again by itself.
 5. **Work from code or the command line**, without its own UI (no UI in Phase 1).
@@ -44,7 +53,7 @@ the yes/no confirmation, the checks, and the explanation.
 
 | Tool | What it is | Licence | ClickHouse | Our own LLM | Status (Oct 2026) | Fit for us |
 |---|---|---|---|---|---|---|
-| **WrenAI** (open-source core) | A semantic layer built for AI agents. Holds models, columns, relationships, metrics, instructions and question-and-SQL examples as reviewable files. `wren dry-plan` turns the agent's query into final database SQL without running it. **No built-in chat or AI agent** — "Wren is a layer, not another chat UI to adopt." **Charts are possible** through `wren genbi`: an AI coding agent that we supply writes a small dashboard web app, which can be previewed locally (`wren genbi open`) or deployed to Vercel or Cloudflare. Wren's own UI and its built-in app-building harness are paid. | Apache-2.0 for core, SDK and skills. The licence file says AGPL modules may be added later. | Yes (`pip install wrenai[clickhouse]`) | Yes — it does not call an LLM itself; our program does | Active. Rebuilt in May 2026; version 0.15.0 (Sept 2026), marked **beta** | **Best fit for the knowledge layer.** Main risk: young |
+| **WrenAI** (open-source core) | A semantic layer built for AI agents. Holds *data models* (its word for table descriptions — not AI models), columns, relationships, metrics, instructions and question-and-SQL examples as reviewable files. `wren dry-plan` turns the agent's query into final database SQL without running it. **No built-in chat or AI agent** — "Wren is a layer, not another chat UI to adopt." **Charts are possible** through `wren genbi`: an AI coding agent that we supply writes a small dashboard web app, which can be previewed locally (`wren genbi open`) or deployed to Vercel or Cloudflare. Wren's own UI and its built-in app-building harness are paid. | Apache-2.0 for core, SDK and skills. The licence file says AGPL modules may be added later. | Yes (`pip install wrenai[clickhouse]`) | Yes — it contains no AI and calls no LLM; our program does | Active. Rebuilt in May 2026; version 0.15.0 (Sept 2026), marked **beta** | **Best fit for the knowledge layer.** Main risk: young |
 | **WrenAI legacy v1** ("Wren GenBI Classic") | The earlier WrenAI product: chat UI, text-to-SQL **and charts**, run with Docker | **AGPL-3.0** | Yes | Yes | **Frozen** on the `legacy/v1` branch: "no new features or security fixes" | Not usable: AGPL is not approved, and it receives no security fixes |
 | **Cube Core** | Mature semantic layer: measures, dimensions, joins. Serves queries over SQL, REST, GraphQL and MCP; can return the SQL it generates. | Apache-2.0 | Yes (official driver) | Yes — no LLM inside the open-source part | Mature, widely used. Its AI chat is in the paid product | **Fallback** if WrenAI disappoints. Heavier to run (a separate Node.js service), and less built around AI agents |
 | **Vanna 2.0** | Text-to-SQL agent framework: memory of question-and-SQL pairs, Plotly charts, summaries | MIT | Yes | Yes | **Repository archived on 29 March 2026 — read-only** | Not for a new build: no fixes or updates |
@@ -59,9 +68,10 @@ the yes/no confirmation, the checks, and the explanation.
 
 **Knowledge layer — WrenAI's open-source core.**
 
-- It is built for exactly our pattern: an AI agent writes SQL against *described*
-  models instead of raw tables, and the engine turns that into the real
-  database's SQL.
+- It is built for exactly our pattern: an AI writes SQL against *described*
+  tables — WrenAI calls these descriptions *data models* — instead of the raw
+  tables, and WrenAI turns that into the real database's SQL. In our design the AI
+  is our own LLM, called by our own program.
 - It holds our kinds of knowledge — meanings, relationships, rules
   (`instructions.md`) and confirmed examples (`queries.yml`) — as reviewable
   files in Git.
@@ -73,7 +83,7 @@ the yes/no confirmation, the checks, and the explanation.
 **Its risk is age:** rebuilt in May 2026, still beta. Two protections:
 
 1. **Requirement B6** — our descriptions stay in our own files and format, and
-   the WrenAI model files are *generated* from them. If WrenAI changes or stops,
+   WrenAI's description files (its data models) are *generated* from them. If WrenAI changes or stops,
    we generate for another tool instead. Vanna's archiving this year is the
    reason this matters.
 2. **A short trial first** (section 6), with **Cube Core as the fallback.**
@@ -86,7 +96,7 @@ the yes/no confirmation, the checks, and the explanation.
   locally with `wren genbi open`. Query results are exported to Parquet and
   bundled into the app, which suits finished runs. It needs an LLM API with
   **tool calling**, strong enough to write a web app for every request, used
-  through a coding agent that can talk to an OpenAI-compatible API. **Never use
+  through a coding agent that talks to our own LLM. **Never use
   `wren genbi deploy`**: it uploads the app — and the data bundled in it — to
   Vercel or Cloudflare.
 - **Path 2 — Grafana.** Our program asks the LLM only for the SQL and the kind of
@@ -96,7 +106,7 @@ the yes/no confirmation, the checks, and the explanation.
 
 **Decided (2026-10-10): the trial uses Path 2, Grafana.** Tool calling works
 (section 7), so Path 1 is possible, but it is not the shorter path: it needs a
-coding agent that sends the gateway's custom headers, and the model would write a
+coding agent that sends the gateway's custom headers, and our LLM would write a
 web app for every request. Path 1 may be tried later with the team's own
 coding-agent API. Either way, the main question of the trial — does WrenAI plus
 our LLM produce correct SQL from our descriptions? — is the same.
@@ -117,7 +127,7 @@ every LLM, instead of relying on the AI to remember it every time.
 dbt Labs' 2026 benchmark compared an LLM writing SQL directly against an LLM
 working through a semantic layer, on the same modelled data:
 
-| Model | Direct text-to-SQL | Through a semantic layer |
+| LLM | Direct text-to-SQL | Through a semantic layer |
 |---|---|---|
 | Claude Sonnet 4.6 | 90.0% | 98.2% |
 | GPT-5.3 Codex | 84.1% | 100.0% |
@@ -133,22 +143,25 @@ makes the semantic-layer approach possible.
    API (including whether it supports tool calling, which decides the graph path
    in section 4), ClickHouse, Grafana and the machine, and writes
    `phase1_check_report.json`.
-2. Install `wrenai[clickhouse]` and point it at `profile_fw`.
-3. Create per-interval views for `linux_block_1_stats`, `linux_block_2_misc` and
-   `linux_nvme_1_stats`, in a separate database `analysis_fw`.
-4. Describe those tables in our catalog format (section 8); generate the WrenAI
-   model files from it. **Waits for the team's latest `.proto` files**; the team
-   then reviews the descriptions.
-5. Run the five example requests, plus five of the existing Grafana graphs
-   described in plain language, through LLM → WrenAI → `dry-plan` → a Grafana
-   panel in a folder named after the run.
+2. Install `wrenai[clickhouse]` (done) and point it at the per-interval views.
+3. Create per-interval views for `linux_block_1_stats` and `linux_block_2_misc`. (The
+   trial was narrowed to these two block tables on 2026-10-10; NVMe follows. Since
+   2026-10-12 each run has its own database, so the views are made per run —
+   [phase1-design.md](phase1-design.md), section 5.)
+4. Describe those tables in our catalog format (section 8), and generate WrenAI's
+   description files (its data models) from it. Drafted on 2026-10-10 from the
+   latest protos; the team now reviews it.
+5. Run ten block-layer requests, built from the five example requests and the
+   existing Grafana graphs, through our LLM → WrenAI `dry-plan` → a Grafana panel in
+   a folder named after the run. Details: [phase1-design.md](phase1-design.md),
+   section 10.
 6. Compare each result with the existing hand-built panel.
 
-**Decide at the end:** keep WrenAI, or switch to Cube Core.
+**Decide at the end:** keep WrenAI, switch to Cube Core, or do WrenAI's one step —
+turning a query on the described tables into ClickHouse SQL — ourselves.
 
-**Needed before the trial:** the LLM API configuration, a Grafana service-account
-token, and the existing dashboards exported as JSON — see the Phase 1 open points
-in [goals-and-requirements.md](goals-and-requirements.md).
+**Needed before the trial:** see [phase1-design.md](phase1-design.md), section 12,
+and the Phase 1 open points in [goals-and-requirements.md](goals-and-requirements.md).
 
 ## 7. Readiness check results (office box, 2026-10-10)
 
@@ -157,48 +170,27 @@ Step 1 of the trial plan is done. Everything the trial depends on works.
 | Area | Result | What it means |
 |---|---|---|
 | **Tool calling** | Works: one call and its result, a forced call, two calls at once, a multi-step text-to-SQL loop, and a whole HTML file in one call | Both graph paths in section 4 are possible |
-| **Correct SQL** | Given our column descriptions, the model followed the running-total rule; its query, run on the real ClickHouse, gave the same total as an independent calculation | First real evidence for the "predefined meanings" approach — one simple question only; the trial's test set is the real test |
-| **Speed** | A plain answer in 0.4 s; a 16,000-token prompt in 2.5 s; every call within the configured 10-second timeout | The model is fast; no reasoning ("thinking") overhead |
+| **Correct SQL** | Given our column descriptions, the LLM followed the running-total rule; its query, run on the real ClickHouse, gave the same total as an independent calculation | First real evidence for the "predefined meanings" approach — one simple question only; the trial's test set is the real test |
+| **Speed** | A plain answer in 0.4 s; a 16,000-token prompt in 2.5 s; every call within the configured 10-second timeout | The LLM is fast; no reasoning ("thinking") overhead |
 | **Context** | A 16,000-token prompt was not cut | Larger sizes not yet tested (`--context-test`) |
-| **Gateway** | Only the `/chat/completions` route exists; `/models` returns "no Route matched" | Nothing here may rely on `/models` — or, probably, `/embeddings`. WrenAI itself does not call the LLM, so this does not affect it; its optional memory index would need a local embedding model |
+| **Gateway** | Only the `/chat/completions` route exists; `/models` returns "no Route matched" | Nothing here may rely on `/models` — or, probably, `/embeddings`. WrenAI itself does not call the LLM, so this does not affect it. Its optional memory index would need an embedding model — under our rule, one running in the office — and the trial does not use it |
 | **ClickHouse, Grafana** | All checks passed | — |
 | **Machine** | WrenAI installed. Python's `requests` cannot verify external HTTPS certificates (`CERTIFICATE_VERIFY_FAILED`), although pip works | The company network re-signs HTTPS traffic with its own certificate, which `requests`' bundled certificates do not include. Point `REQUESTS_CA_BUNDLE` at the system certificate bundle. The LLM gateway uses plain HTTP and is unaffected |
 
-## 8. The catalog: agreed format and open questions (input for trial step 4)
+## 8. The catalog (input for trial step 4)
 
-**Format (agreed in discussion, not yet built).**
+**Built (2026-10-10)** in [knowledge/catalog/](../knowledge/catalog/) for
+`linux_block_1_stats` and `linux_block_2_misc`. The format, how to review it and
+how it is checked against the protos are in
+[knowledge/README.md](../knowledge/README.md); its place in the system is in
+[phase1-design.md](phase1-design.md). **The open questions for the block tables now
+live in their catalog files.**
 
-- One YAML file per collector (one per `.proto`), plus one for the columns every
-  table shares (`run_id`, `ts`, `record_id`, `timestamp`, `hostname`,
-  `component`, `tag`, `log_level`, `_loaded_at`).
-- **Generate the files from the loader's own schema code**
-  (`src.registry.build_schema`), never by hand. That guarantees the exact
-  column names ClickHouse holds: flattened names such as `io_flags_direct`, and
-  child tables such as `linux_nvme_1_stats_per_queue`.
-- Each column has: `meaning`, `unit`, `kind` (counter · gauge · interval ·
-  dimension · label · timestamp), enum `values` where relevant, `status`, and an
-  optional `basis` (where the description came from) and `note`.
-- `status`: **todo** (something missing) · **draft** (pre-filled from documents
-  or standard interfaces — needs review) · **confirmed** (checked by an engineer).
-- Repeating families — size buckets, unaligned ranges, I/O flags — are described
-  once as a **group**, so the team reviews a handful of entries, not ~335.
-- Each file starts with collector-level facts (source, counts since, sampling,
-  device filter, what it can and cannot observe) and a **questions** list.
-- Safe to pre-fill: `linux_block_1_stats` from the kernel's
-  `Documentation/block/stat.rst`; `linux_ssd_1_stats` from the NVMe SMART / Health
-  log (watch the units: data units are 512,000 bytes, and temperature is in Kelvin).
+Still to come — NVMe, syscall and SSD tables (start each with
+`python tools/catalog.py skeleton <stem>`). Safe to pre-fill `linux_ssd_1_stats`
+from the NVMe SMART / Health log (watch the units: data units are 512,000 bytes,
+and temperature is in Kelvin). Questions already known for NVMe:
 
-**Open questions for the three trial tables** — re-check them against the latest
-protos; the answers decide how the data checks are written.
-
-- `linux_block_1_stats`: which `/sys/block/<dev>/stat` fields are
-  `device_busy_time` and `io_time`? Is `device` the namespace (`nvme3n1`) or the
-  controller (`nvme3`)?
-- `linux_block_2_misc`: how do `total_read_ios` and `read_bios` differ (is total =
-  bios + splits)? Are sizes counted when a bio is submitted, or after splitting?
-  Is `read_unaligned` the sum of the `read_*_range` columns? Which total should
-  the buckets add up to? What goes in `read_lt_4kb` versus `read_lt_4kb_range`?
-  Are sizes powers of two? Where does a bio larger than 8 MiB go?
 - `linux_nvme_1_stats`: is `read_kbs` in KB or KiB? What interval does
   `read_nvme_driver_time_ns` measure? Is `queue_id` 0 the admin queue? Is
   `cpu_id` the submitting or the completing CPU? Are `lba_ranges` bounds in LBAs,

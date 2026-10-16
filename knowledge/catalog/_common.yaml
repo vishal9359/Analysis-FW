@@ -1,0 +1,83 @@
+# =============================================================================
+#  Measurement Catalog - columns shared by every table
+# =============================================================================
+#  What every column of this table means. The analysis reads this instead of
+#  guessing from column names. How to review: knowledge/README.md. In short:
+#    status: todo       something is missing - fill in each TODO
+#    status: draft      pre-filled from documents and field names - please check
+#    status: confirmed  checked by an engineer - set this when you are done
+#  Answer the questions first: they decide how the data checks are written.
+#
+#  Written for: every proto (GenericFormat) and the loader
+#  Do not rename 'column' or 'columns' entries: they must match ClickHouse exactly.
+#  Check this file against the proto any time:  python tools/catalog.py check
+# =============================================================================
+
+applies_to: every table (record_id only in tables that have child tables)
+columns:
+- column: run_id
+  type: String
+  meaning: 'The run this row belongs to: the name of the run folder, for example ProfileData-fio-20261008-101500.
+    Added by the loader.'
+  unit: name
+  kind: label
+  status: draft
+  basis: 'loader: src/runner.py'
+- column: ts
+  type: DateTime
+  meaning: Time of the sample in UTC, whole seconds. Parsed by the loader from 'timestamp'.
+  unit: UTC time
+  kind: timestamp
+  status: draft
+  basis: 'loader: src/worker.py; docs/timestamp-format.md'
+- column: record_id
+  type: UInt64
+  meaning: Links a row of a main table to its rows in the child tables. Added by the loader, only
+    where child tables exist.
+  unit: id
+  kind: dimension
+  status: draft
+  basis: docs/decisions/0005-uint64-ids-stopgap.md
+- column: timestamp
+  type: String
+  meaning: The sample time exactly as Profile FW wrote it.
+  unit: text
+  kind: label
+  status: draft
+  basis: .proto GenericFormat
+- column: hostname
+  type: String
+  meaning: Name of the machine that was profiled.
+  unit: name
+  kind: label
+  status: draft
+  basis: .proto GenericFormat
+- column: component
+  type: UInt32
+  meaning: 'Which collector wrote the row: 101 block, 102 NVMe stats, 103 SSD, 104 NVMe randomness,
+    1 syscall stats, 2 syscall flags.'
+  unit: id
+  kind: label
+  status: draft
+  basis: docs/Profile-code-flow.md
+- column: tag
+  type: String
+  meaning: Run label given to the profiler with -tag.
+  unit: name
+  kind: label
+  status: draft
+  basis: .proto GenericFormat
+- column: log_level
+  type: UInt32
+  meaning: Log level from the record header. Not used in analysis.
+  unit: id
+  kind: label
+  status: draft
+  basis: .proto GenericFormat
+- column: _loaded_at
+  type: DateTime
+  meaning: When the loader inserted the row.
+  unit: UTC time
+  kind: timestamp
+  status: draft
+  basis: 'loader: src/worker.py'

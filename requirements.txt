@@ -1,8 +1,12 @@
 # Analysis FW — Module 1
-protobuf>=4.25
+protobuf>=6.31         # FieldDescriptor.is_repeated, which the loader uses, starts at 6.31
 grpcio-tools>=1.60     # bundles protoc for runtime .proto compilation
 PyYAML>=6.0
 clickhouse-connect>=0.7
+
+# Phase 1 (analysis/): plain-language request to Grafana graph
+wrenai==0.15.0         # SQL planner over our generated data models; contains no AI.
+                       # Pinned: beta, and its data-model format may change.
 
 # dev/test only
 pytest>=7.0

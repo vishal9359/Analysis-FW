@@ -1,0 +1,238 @@
+# =============================================================================
+#  Measurement Catalog - linux_block_1_stats
+# =============================================================================
+#  What every column of this table means. The analysis reads this instead of
+#  guessing from column names. How to review: knowledge/README.md. In short:
+#    status: todo       something is missing - fill in each TODO
+#    status: draft      pre-filled from documents and field names - please check
+#    status: confirmed  checked by an engineer - set this when you are done
+#  Answer the questions first: they decide how the data checks are written.
+#
+#  Written for: tests/sample_protos/linux_block_1_stats.proto
+#  Do not rename 'column' or 'columns' entries: they must match ClickHouse exactly.
+#  Check this file against the proto any time:  python tools/catalog.py check
+# =============================================================================
+
+table: linux_block_1_stats
+proto: linux_block_1_stats.proto
+schema_fingerprint: sha256:b8934f5040b2bc49
+collector: blk_dev_stats
+component: 101
+collected_from: Reads the file /sys/block/<device>/stat. Not eBPF.
+counts_since: boot
+sampling: Every -i seconds (default 1 s). Each sample is a snapshot of the running totals; the
+  change between two samples is the activity in between.
+device_filter: Only the device given to the profiler with -dev.
+observes: Every request the block layer completes for this device, from all processes and from
+  the kernel itself (writeback, readahead, filesystem journal). Requests are counted when they
+  complete, after merging. Covers the whole disk, all partitions.
+status: draft
+questions:
+- id: Q1
+  question: 'Which /sys/block/<device>/stat fields are device_busy_time_ms and io_time_ms? Our
+    reading: device_busy_time_ms is field 10 (io_ticks: time with at least one request in flight)
+    and io_time_ms is field 11 (time_in_queue: time weighted by how many requests were in flight).
+    The names could be read either way, and the Device Busy graph depends on the answer.'
+  answer: 'Yes, as read: device_busy_time_ms is field 10 (io_ticks) and io_time_ms is field 11
+    (time_in_queue). (Team, 2026-10-12)'
+- id: Q2
+  question: Does the device column hold the namespace (for example nvme3n1) or the controller
+    given to -dev (for example nvme3)? Other tables may use the other form, and comparisons between
+    tables must use the same device.
+  answer: 'The controller name given to the profiler with -dev, such as nvme1 or nvme2. The profiler
+    collects from the kernel and keeps only that device''s data. (Team, 2026-10-12)'
+- id: Q3
+  question: The fields were renamed in this proto (read_ios -> read_io_count, sectors_read ->
+    read_sectors_512b, device_busy_time -> device_busy_time_ms, ...). Are the meanings unchanged
+    - the same stat fields as before? This decides whether data already in ClickHouse can simply
+    be renamed.
+  answer: 'Yes, unchanged. (Team, 2026-10-12) Runs are now loaded into a database of their own,
+    so old and new names never meet in one table.'
+tables:
+- table: linux_block_1_stats
+  columns:
+  - column: device
+    type: String
+    meaning: The device the profiler was told to watch with -dev - an NVMe controller name such
+      as nvme1. Only this device's data is kept.
+    unit: name
+    kind: label
+    status: confirmed
+    basis: profiler -dev option; team answer to Q2 (2026-10-12)
+  - column: read_io_count
+    type: UInt64
+    meaning: Read requests completed since boot.
+    unit: count
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 1
+  - column: reads_merged_count
+    type: UInt64
+    meaning: Read requests merged with a request already queued, since boot.
+    unit: count
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 2
+  - column: read_sectors_512b
+    type: UInt64
+    meaning: Sectors read since boot. One sector is 512 bytes here, whatever the device's real
+      block size.
+    unit: sectors (512 bytes)
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 3
+  - column: read_time_ms
+    type: UInt64
+    meaning: Time spent on read requests since boot, added up over all requests. Grows faster
+      than the clock when requests overlap.
+    unit: ms
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 4
+  - column: write_io_count
+    type: UInt64
+    meaning: Write requests completed since boot.
+    unit: count
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 5
+  - column: writes_merged_count
+    type: UInt64
+    meaning: Write requests merged with a request already queued, since boot.
+    unit: count
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 6
+  - column: write_sectors_512b
+    type: UInt64
+    meaning: Sectors written since boot (512 bytes each).
+    unit: sectors (512 bytes)
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 7
+  - column: write_time_ms
+    type: UInt64
+    meaning: Time spent on write requests since boot, added up over all requests.
+    unit: ms
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 8
+  - column: in_flight_io_count
+    type: UInt64
+    meaning: Requests issued to the device and not yet completed, at the moment of sampling.
+    unit: count
+    kind: gauge
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 9
+    note: 'Sampled once per interval: a short peak between two samples is not seen. Never subtract
+      two samples.'
+  - column: device_busy_time_ms
+    type: UInt64
+    meaning: Time the device had at least one request in flight, since boot (io_ticks).
+    unit: ms
+    kind: counter
+    status: confirmed
+    basis: Linux kernel Documentation/block/stat.rst, field 10; team answer to Q1 (2026-10-12)
+  - column: io_time_ms
+    type: UInt64
+    meaning: Time requests spent in flight, weighted by how many were in flight, since boot (time_in_queue).
+    unit: ms
+    kind: counter
+    status: confirmed
+    basis: Linux kernel Documentation/block/stat.rst, field 11; team answer to Q1 (2026-10-12)
+  - column: discard_io_count
+    type: UInt64
+    meaning: Discard requests completed since boot.
+    unit: count
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 12
+  - column: discards_merged_count
+    type: UInt64
+    meaning: Discard requests merged, since boot.
+    unit: count
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 13
+  - column: discard_sectors_512b
+    type: UInt64
+    meaning: Sectors discarded since boot (512 bytes each).
+    unit: sectors (512 bytes)
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 14
+  - column: discard_time_ms
+    type: UInt64
+    meaning: Time spent on discard requests since boot, added up over all requests.
+    unit: ms
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 15
+  - column: flush_io_count
+    type: UInt64
+    meaning: Flush requests completed since boot.
+    unit: count
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 16
+  - column: flush_time_ms
+    type: UInt64
+    meaning: Time spent on flush requests since boot, added up over all requests.
+    unit: ms
+    kind: counter
+    status: draft
+    basis: Linux kernel Documentation/block/stat.rst, field 17
+metrics:
+- metric: read_iops
+  meaning: Read requests completed per second.
+  formula: read_io_count_delta / interval_s
+  unit: I/O per second
+  status: draft
+- metric: write_iops
+  meaning: Write requests completed per second.
+  formula: write_io_count_delta / interval_s
+  unit: I/O per second
+  status: draft
+- metric: read_mib_per_s
+  meaning: Data read per second.
+  formula: read_sectors_512b_delta * 512 / 1048576 / interval_s
+  unit: MiB/s
+  status: draft
+- metric: write_mib_per_s
+  meaning: Data written per second.
+  formula: write_sectors_512b_delta * 512 / 1048576 / interval_s
+  unit: MiB/s
+  status: draft
+- metric: avg_read_latency_ms
+  meaning: Average time per completed read in the interval (iostat r_await). Empty when there
+    were no reads. Percentiles cannot be derived from these counters.
+  formula: read_time_ms_delta / nullIf(read_io_count_delta, 0)
+  unit: ms
+  status: draft
+- metric: avg_write_latency_ms
+  meaning: Average time per completed write in the interval (iostat w_await). Empty when there
+    were no writes.
+  formula: write_time_ms_delta / nullIf(write_io_count_delta, 0)
+  unit: ms
+  status: draft
+- metric: avg_read_size_kib
+  meaning: Average size of a completed read.
+  formula: read_sectors_512b_delta * 512 / 1024 / nullIf(read_io_count_delta, 0)
+  unit: KiB
+  status: draft
+- metric: avg_write_size_kib
+  meaning: Average size of a completed write.
+  formula: write_sectors_512b_delta * 512 / 1024 / nullIf(write_io_count_delta, 0)
+  unit: KiB
+  status: draft
+- metric: device_busy_pct
+  meaning: Share of the interval the device had at least one request in flight (iostat %util).
+    The Device Busy graph is built on this.
+  formula: device_busy_time_ms_delta / (interval_s * 1000) * 100
+  unit: percent
+  status: draft
+- metric: avg_queue_depth
+  meaning: Average number of requests in flight over the interval (iostat aqu-sz).
+  formula: io_time_ms_delta / (interval_s * 1000)
+  unit: requests
+  status: draft

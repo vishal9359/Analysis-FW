@@ -59,6 +59,7 @@ def build_fixture():
     the loader would never actually be given. Hash the protos instead.
     """
     h = hashlib.sha256()
+    h.update((HERE / "make_fixture.py").read_bytes())      # a generator change rebuilds too
     for p in sorted(PROTO_DIR.glob("*.proto")):
         h.update(p.name.encode())
         h.update(p.read_bytes())
@@ -97,7 +98,12 @@ def test_detects_record_generic_payload_wrapper():
     s = _schema(BLOCK1)
     assert s.record_cls.DESCRIPTOR.name == "StatLog"
     assert s.wrapper_cls.DESCRIPTOR.name == "StatLogs"
-    assert s.repeated_field == "stat_logs"
+    # the wrapper's field name is the producer's choice (stat_logs, stats_log ...):
+    # detection must find whichever repeated field holds the records
+    held = [f.name for f in s.wrapper_cls.DESCRIPTOR.fields
+            if f.message_type is not None
+            and f.message_type.full_name == s.record_cls.DESCRIPTOR.full_name]
+    assert s.repeated_field in held and len(held) == 1
     assert s.generic_field == "generic_format"
     assert s.payload_field == "payload"
 
@@ -140,7 +146,10 @@ def test_nvme_children_detected():
     assert s.has_record_id is True
     assert "record_id" in [c.name for c in s.columns]
     kids = {c.table: c for c in s.children}
-    assert set(kids) == {f"{NVME}_per_queue", f"{NVME}_per_core"}
+    # one child table per repeated payload field, whatever the proto adds (lba_ranges ...)
+    payload = s.record_cls.DESCRIPTOR.fields_by_name[s.payload_field].message_type
+    assert set(kids) == {f"{NVME}_{f.name}" for f in payload.fields if f.is_repeated}
+    assert {f"{NVME}_per_queue", f"{NVME}_per_core"} <= set(kids)
 
     q = kids[f"{NVME}_per_queue"]
     assert q.repeated_field == "per_queue"
