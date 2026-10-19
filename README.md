@@ -13,6 +13,7 @@ layer, the loader picks it up with no change and no configuration.
 
 ## Contents
 
+- [How it fits together](#how-it-fits-together)
 - [Prerequisites](#prerequisites)
 - [Install](#install)
 - [Configure](#configure)
@@ -23,6 +24,44 @@ layer, the loader picks it up with no change and no configuration.
 - [Checking that a load worked](#checking-that-a-load-worked)
 - [Troubleshooting](#troubleshooting)
 - [Known limits in this release](#known-limits-in-this-release)
+
+---
+
+## How it fits together
+
+```text
+                        ┌───────────────────────────────────────────────────┐
+   .pb files            │ Analysis FW                                       │
+   (a ProfileData-*     │                                                   │
+    run directory)      │  ┌────────┐     ┌─────────┐     ┌───────┐         │
+     ──────────────────►│  │ loader │ ──► │ workers │ ──► │ store │         │
+                        │  └────────┘     └─────────┘     └───┬───┘         │
+                        │                                     │             │
+                        │                                     ▼             │
+                        │                            ,─────────────────.    │
+                        │                           (     ClickHouse    )   │
+                        │                            `─────────────────'    │
+                        │                                     ▲             │
+                        │                                     │ SQL         │
+                        │  ┌ ─ ─ ─ ─ ─ ┐          ┌───────────┴────────┐    │
+                        │     deploy *   ────────►│   Grafana server   │◄─────  Grafana UI
+                        │  └ ─ ─ ─ ─ ─ ┘          └────────────────────┘    │
+                        └───────────────────────────────────────────────────┘
+```
+
+`* deploy` installs the Grafana dashboards. It ships separately and is **not** part
+of this repository.
+
+| | |
+|---|---|
+| **loader** | reads a run directory and works out the tables from the `.proto` files in it |
+| **workers** | decode the `.pb` data files, several at a time (`store.workers`) |
+| **store** | creates any missing tables and inserts the rows in batches |
+| **ClickHouse** | where your data lands, one database per producer |
+| **Grafana server** | queries ClickHouse with SQL to draw the dashboards |
+
+You run the **loader**. Everything from ClickHouse rightwards is how you read the
+results back.
 
 ---
 
