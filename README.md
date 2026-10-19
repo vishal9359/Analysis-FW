@@ -44,10 +44,14 @@ layer, the loader picks it up with no change and no configuration.
                         │                                     ▲             │
                         │                                     │ SQL         │
                         │  ┌ ─ ─ ─ ─ ─ ┐          ┌───────────┴────────┐    │
-                        │     deploy *   ────────►│   Grafana server   │◄─────  Grafana UI
+                        │     deploy *   ────────►│   Grafana server   │◄────── Grafana UI
+                        │                         │                    │──────►
                         │  └ ─ ─ ─ ─ ─ ┘          └────────────────────┘    │
                         └───────────────────────────────────────────────────┘
 ```
+
+The paired arrows on the right are one conversation: the browser asks, the Grafana
+server answers.
 
 `* deploy` installs the Grafana dashboards. It ships separately and is **not** part
 of this repository.
