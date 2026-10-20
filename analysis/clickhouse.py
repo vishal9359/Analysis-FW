@@ -60,6 +60,10 @@ class ClickHouse:
             f"SELECT 1 FROM {quote(database)}.{quote(table)} WHERE run_id = {{run:String}} LIMIT 1",
             {"run": run}))
 
+    def run_ids(self, database: str, table: str) -> list[str]:
+        return [r[0] for r in self.rows(
+            f"SELECT DISTINCT run_id FROM {quote(database)}.{quote(table)} ORDER BY run_id LIMIT 11")]
+
     def columns(self, database: str) -> dict[str, dict[str, str]]:
         out: dict[str, dict[str, str]] = {}
         for table, name, ch_type in self.rows(

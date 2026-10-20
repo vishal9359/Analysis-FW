@@ -1,8 +1,8 @@
 """python -m analysis - the Phase 1 pieces built so far, for the office box.
 
     python -m analysis check-run <run>          step 0: where the run is, what it has
-    python -m analysis prepare <run>            step 0, then make the run's views if
-                                                missing, then check their changes add up
+    python -m analysis prepare <run>            step 0, then make (or remake) the run's
+                                                views, then check their changes add up
     python -m analysis plan <run> "<query>"     WrenAI turns a query written on the data
                                                 models into ClickHouse SQL; check C1.
                                                 Add --execute to also run it, read-only
@@ -10,10 +10,13 @@
                                                 the same planning and checks from saved
                                                 data models - no ClickHouse at all
 
-<run> is the run folder's name, e.g. ProfileData-fio-20261008-101500. ClickHouse's
-host and port come from config/config.yaml (CH_HOST / CH_PORT override), like the
-loader's. Only `prepare` writes, and only CREATE VIEW. `plan` saves the data models
-it used to out/<run>/data_models.json, which `plan-file` reads.
+<run> is the run folder's name, e.g. ProfileData-fio-20261008-101500, or its path:
+only the last part is used, because the loader names a run after its folder. Each
+command searches every database for the run; --db <name> looks in that one only.
+Only the host and port come from config/config.yaml (CH_HOST / CH_PORT override) -
+its database name is not used here. Only `prepare` writes, and only CREATE VIEW.
+`plan` saves the data models it used to out/<run>/data_models.json, which
+`plan-file` reads.
 """
 from __future__ import annotations
 
@@ -25,7 +28,7 @@ from pathlib import Path
 from . import catalog as catalog_mod
 from .catalog import ROOT
 from .checks import model_query_problems, planned_sql_problems
-from .runs import RunCheck, RunError, check_run
+from .runs import RunCheck, RunError, check_run, run_name
 from .views import create_view_sql, verify_sql, view_name
 from .wren_project import PlanError, data_models, plan
 
@@ -73,7 +76,7 @@ def _plan_and_check(manifest: dict, query: str, run: str | None) -> str | None:
 
 
 def cmd_check_run(db, args, cat) -> int:
-    run = check_run(db, args.run, cat)
+    run = check_run(db, args.run, cat, args.db)
     _report(run)
     if run.problems:
         print(STOP_TYPES)
@@ -82,7 +85,7 @@ def cmd_check_run(db, args, cat) -> int:
 
 
 def cmd_prepare(db, args, cat) -> int:
-    run = check_run(db, args.run, cat)
+    run = check_run(db, args.run, cat, args.db)
     _report(run)
     if run.problems:
         print(STOP_TYPES)
@@ -118,7 +121,7 @@ def cmd_prepare(db, args, cat) -> int:
 
 
 def cmd_plan(db, args, cat) -> int:
-    run = check_run(db, args.run, cat)
+    run = check_run(db, args.run, cat, args.db)
     if run.problems:
         _report(run)
         print(STOP_TYPES)
@@ -148,17 +151,22 @@ def cmd_plan_file(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m analysis", description=__doc__.split("\n\n")[0])
     ap.add_argument("--config", type=Path, default=None,
-                    help="loader config with the ClickHouse host and port "
+                    help="loader config, for the ClickHouse host and port only "
                          "(default: config/config.yaml)")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    run_help = "the run folder's name, e.g. ProfileData-fio-20261008-101500, or its path"
+    db_help = "the database that holds the run (default: search every database for it)"
     for name, text in (("check-run", "step 0 only - read-only"),
                        ("prepare", "step 0, then make the run's views and check them")):
-        sub.add_parser(name, help=text).add_argument("run")
+        s = sub.add_parser(name, help=text)
+        s.add_argument("run", help=run_help)
+        s.add_argument("--db", help=db_help)
     p = sub.add_parser("plan", help="plan a query written on the data models, and check it")
-    p.add_argument("run")
+    p.add_argument("run", help=run_help)
     p.add_argument("query", help="SQL on the data models, e.g. SELECT linux_block_1_stats.ts, "
                                  "linux_block_1_stats.read_iops FROM linux_block_1_stats WHERE "
                                  "linux_block_1_stats.run_id = '<run>'")
+    p.add_argument("--db", help=db_help)
     p.add_argument("--execute", action="store_true", help="also run it (read-only)")
     f = sub.add_parser("plan-file", help="plan from saved data models, without ClickHouse")
     f.add_argument("file", help="a data_models.json saved by `plan`")
@@ -167,6 +175,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "plan-file":
         return cmd_plan_file(args)
+    try:
+        run = run_name(args.run)
+    except RunError as exc:
+        print(f"STOP: {exc}")
+        return 1
+    if run != args.run:
+        print(f"run name: {run} (the last part of the path given)")
+        args.run = run
     from .clickhouse import ClickHouse
     try:
         db = ClickHouse.from_config(args.config)

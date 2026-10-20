@@ -73,7 +73,7 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
   catalog), per-run views, per-run WrenAI data models, check C1 on WrenAI's SQL.
   Commands: `python -m analysis check-run | prepare | plan | plan-file` (README,
   "Phase 1").
-- **`tests/test_analysis.py`** — 16 tests on a fake database; no ClickHouse.
+- **`tests/test_analysis.py`** — 20 tests on a fake database; no ClickHouse.
 - **What testing WrenAI showed** ([phase1-design.md](phase1-design.md) §6): strict mode
   let a database-qualified name reach a raw table, so C1 checks every table of the
   final SQL; `ref_sql` was dropped (WrenAI rewrote our ClickHouse SQL); WrenAI rewrites

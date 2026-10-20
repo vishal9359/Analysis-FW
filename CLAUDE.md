@@ -100,8 +100,8 @@ where it and an ADR disagree, the ADR wins.
 The full board — done, next, waiting, known issues — is [docs/roadmap.md](docs/roadmap.md),
 "Now — Phase 1". In short (2026-10-16):
 
-- **Branch:** Phase 1 work is on **`phase1`**, not yet merged into `main`. All 62 tests
-  pass (46 loader, 16 Phase 1); `python tools/catalog.py check` passes.
+- **Branch:** Phase 1 work is on **`phase1`**, not yet merged into `main`. All 66 tests
+  pass (46 loader, 20 Phase 1); `python tools/catalog.py check` passes.
 - **Done:** Module 1 loader. Phase 1 requirements, tool choice (WrenAI trial, Grafana
   draws), office-box readiness check, design ([docs/phase1-design.md](docs/phase1-design.md)),
   Measurement Catalog for `linux_block_1_stats` and `linux_block_2_misc` with the team's
@@ -127,7 +127,8 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
   root (docs/development.md, "Phase 1"). Phase 1 code goes in `analysis/`; `src/` stays
   the loader.
 - **Config:** `config/config.yaml` (repo root, editable). Override with `--config PATH`
-  or `CH_HOST`/`CH_PORT` env. `analysis/` reads its ClickHouse host and port from it too.
+  or `CH_HOST`/`CH_PORT` env. `analysis/` reads only the host and port from it: it finds
+  a run's database by the run's name (the folder's name; a path works too), or `--db`.
 - **Test:** `python -m pytest tests/ -q` — runs the whole pipeline against an in-memory
   store, **no database needed**. The fixture rebuilds automatically when any
   `tests/sample_protos/*.proto` or `tests/make_fixture.py` changes; generate one by hand

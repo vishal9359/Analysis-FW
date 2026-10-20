@@ -335,10 +335,12 @@ python -m analysis plan <run> "<query>"    # WrenAI plans it, check C1; --execut
 python -m analysis plan-file out/<run>/data_models.json "<query>"   # no ClickHouse
 ```
 
-`<run>` is the run folder's name. A query is written on the data models, for example
-`SELECT linux_block_1_stats.ts, linux_block_1_stats.read_iops FROM linux_block_1_stats
-WHERE linux_block_1_stats.run_id = '<run>'`. The ClickHouse host and port come from
-`config/config.yaml`, like the loader's.
+`<run>` is the run folder's name, or its path: only the last part is used, because the
+loader names each run after its folder. Each command searches every database for the
+run; `--db <name>` looks in that one only. A query is written on the data models, for
+example `SELECT linux_block_1_stats.ts, linux_block_1_stats.read_iops FROM
+linux_block_1_stats WHERE linux_block_1_stats.run_id = '<run>'`. Only the ClickHouse
+host and port come from `config/config.yaml`; its database name is not used here.
 
 ### Trying it on your own machine (ClickHouse in WSL2)
 

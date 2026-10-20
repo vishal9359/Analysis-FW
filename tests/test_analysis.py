@@ -17,7 +17,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 
 from analysis import catalog as catalog_mod  # noqa: E402
-from analysis.runs import RunError, check_run, find_database  # noqa: E402
+from analysis.runs import RunError, check_run, find_database, run_name  # noqa: E402
 from analysis.views import create_view_sql, partition_keys, verify_sql, view_columns  # noqa: E402
 from analysis.wren_project import WREN_TYPES, data_models  # noqa: E402
 from src.registry import build_schema  # noqa: E402
@@ -44,8 +44,14 @@ class FakeDB:
     def has_run(self, database, table, run):
         return run in self.runs.get(database, set())
 
+    def run_ids(self, database, table):
+        return sorted(self.runs.get(database, set()))
+
     def columns(self, database):
         return self.databases[database]
+
+    def close(self):
+        pass
 
 
 @pytest.fixture(scope="module")
@@ -100,6 +106,48 @@ def test_step0_unknown_or_twice_loaded_run_stops(cat):
     twice = FakeDB({DB: run_db(), "copy": run_db()}, {DB: {RUN}, "copy": {RUN}})
     with pytest.raises(RunError, match="more than one database"):
         find_database(twice, RUN, cat)
+
+
+def test_step0_db_option_names_the_database(cat):
+    twice = FakeDB({DB: run_db(), "copy": run_db()}, {DB: {RUN}, "copy": {RUN}})
+    assert find_database(twice, RUN, cat, DB) == DB             # --db settles "loaded twice"
+    assert find_database(twice, RUN, cat, "copy") == "copy"
+    with pytest.raises(RunError, match="none of the described tables.*copy"):
+        find_database(twice, RUN, cat, "no_such_db")
+    other = FakeDB({DB: run_db(), "copy": run_db()}, {DB: {RUN}, "copy": {"ProfileData-b"}})
+    with pytest.raises(RunError, match=r"not found in database 'copy'\. "
+                                       r"Runs loaded: ProfileData-b \(in copy\)"):
+        find_database(other, RUN, cat, "copy")
+
+
+def test_step0_not_found_says_which_runs_are_loaded(cat):
+    db = FakeDB({DB: run_db()}, {DB: {RUN}})
+    with pytest.raises(RunError, match=rf"Runs loaded: {RUN} \(in {DB}\)"):
+        find_database(db, "ProfileData-nope", cat)
+
+
+def test_run_name_from_the_folder_name_or_its_path(tmp_path):
+    assert run_name(RUN) == RUN
+    assert run_name(f"/data/runs/{RUN}") == RUN
+    assert run_name(f"/data/runs/{RUN}/") == RUN
+    folder = tmp_path / RUN
+    folder.mkdir()
+    assert run_name(str(folder)) == RUN
+    with pytest.raises(RunError, match="no run given"):
+        run_name("  ")
+
+
+def test_commands_take_a_path_and_db(cat, monkeypatch, capsys):
+    from analysis import clickhouse
+    from analysis.__main__ import main
+    fake = FakeDB({DB: run_db(), "copy": run_db()}, {DB: {RUN}, "copy": {RUN}})
+    monkeypatch.setattr(clickhouse.ClickHouse, "from_config",
+                        classmethod(lambda cls, path=None: fake))
+    assert main(["check-run", f"/data/runs/{RUN}/", "--db", DB]) == 0
+    out = capsys.readouterr().out
+    assert f"run name: {RUN}" in out and f"run {RUN} is in database {DB}" in out
+    assert main(["check-run", RUN]) == 1                        # in two databases: needs --db
+    assert "Choose one with --db" in capsys.readouterr().out
 
 
 def test_step0_older_run_and_proto_changes(cat):

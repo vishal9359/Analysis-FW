@@ -353,7 +353,9 @@ request: Show read and write IOPS over time at the block layer.
 
 The request names only the run. Step 0 finds the database that holds it by asking
 ClickHouse which database has rows for that run, so it works whatever the database is
-called. If two databases hold the same run (loaded twice), it stops and asks which.
+called. If two databases hold the same run (loaded twice), it stops and asks which;
+`--db <name>` answers that (2026-10-20). A run that is not found is reported together
+with the runs that are loaded.
 
 **What step 2 shows** — the meaning, in plain words, before anything runs:
 

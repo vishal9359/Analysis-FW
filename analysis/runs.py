@@ -8,9 +8,12 @@ columns it has. Everything here only reads.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from .catalog import Catalog, Column
+
+EXAMPLE_RUN = "ProfileData-fio-20261008-101500"
 
 
 class RunError(Exception):
@@ -26,8 +29,20 @@ class Database(Protocol):
     def has_run(self, database: str, table: str, run: str) -> bool:
         """True if the table holds rows of this run."""
 
+    def run_ids(self, database: str, table: str) -> list[str]:
+        """The runs the table holds (a few at most), to say what is there when a run is not."""
+
     def columns(self, database: str) -> dict[str, dict[str, str]]:
         """{table: {column: ClickHouse type}} for every table, not view, of the database."""
+
+
+def run_name(arg: str) -> str:
+    """The run's name, from the name or the path of its folder. The loader names a
+    run after its folder (run_id, src/runner.py), so a path gives the same name."""
+    if not arg.strip():
+        raise RunError(f"no run given: name the run folder, for example {EXAMPLE_RUN}")
+    path = Path(arg)
+    return path.resolve().name if path.is_dir() else path.name
 
 
 @dataclass
@@ -53,28 +68,49 @@ class RunCheck:
         return [f"{t.table}.{w}" for t in self.tables.values() for w in t.wrong_type]
 
 
-def find_database(db: Database, run: str, catalog: Catalog) -> str:
+def find_database(db: Database, run: str, catalog: Catalog, database: str | None = None) -> str:
     """The database whose described tables hold this run. The request names only
-    the run, so this works whatever the database is called."""
+    the run, so this works whatever the database is called; `database` (--db)
+    limits the search to that one database."""
     names = sorted(catalog.tables)
     by_db: dict[str, list[str]] = {}
-    for database, table in db.find_tables(names):
-        by_db.setdefault(database, []).append(table)
+    for d, table in db.find_tables(names):
+        by_db.setdefault(d, []).append(table)
+    if database is not None:
+        if database not in by_db:
+            raise RunError(f"database {database!r} has none of the described tables "
+                           f"({', '.join(names)}). Is the name right? Databases that have "
+                           f"them: {', '.join(sorted(by_db)) or 'none'}.")
+        by_db = {database: by_db[database]}
     found = [d for d, tables in sorted(by_db.items())
              if any(db.has_run(d, t, run) for t in sorted(tables))]
     if not found:
-        raise RunError(f"run {run!r} was not found in any database with a described table "
-                       f"({', '.join(names)}). Is it loaded? The run name is the run folder's "
-                       f"name, for example ProfileData-fio-20261008-101500.")
+        where = (f"database {database!r}" if database is not None else
+                 f"any database with a described table ({', '.join(names)})")
+        raise RunError(f"run {run!r} was not found in {where}. {_runs_loaded(db, by_db)} "
+                       f"The run name is the run folder's name, for example {EXAMPLE_RUN}.")
     if len(found) > 1:
         raise RunError(f"run {run!r} is in more than one database: {', '.join(found)}. "
-                       f"Was it loaded twice? Drop the extra database, then try again.")
+                       f"Was it loaded twice? Choose one with --db, or drop the extra database.")
     return found[0]
 
 
-def check_run(db: Database, run: str, catalog: Catalog) -> RunCheck:
+def _runs_loaded(db: Database, by_db: dict[str, list[str]], limit: int = 10) -> str:
+    """'Runs loaded: a (in db1), b (in db2).' - what is there, for an error message."""
+    seen: list[str] = []
+    for d, tables in sorted(by_db.items()):
+        seen += [f"{r} (in {d})" for r in db.run_ids(d, sorted(tables)[0])]
+        if len(seen) > limit:
+            break
+    if not seen:
+        return "No runs are loaded there."
+    more = ", and more" if len(seen) > limit else ""
+    return "Runs loaded: " + ", ".join(seen[:limit]) + more + "."
+
+
+def check_run(db: Database, run: str, catalog: Catalog, database: str | None = None) -> RunCheck:
     """Step 0: where the run is, and which described columns it has."""
-    database = find_database(db, run, catalog)
+    database = find_database(db, run, catalog, database)
     actual = db.columns(database)
     tables: dict[str, TableCheck] = {}
     for name, entry in sorted(catalog.tables.items()):
