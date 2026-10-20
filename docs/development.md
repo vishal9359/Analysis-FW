@@ -363,6 +363,18 @@ python -m analysis prepare   ProfileData-fixture-20260727-180221
 python -m analysis plan ProfileData-fixture-20260727-180221 "SELECT linux_block_1_stats.ts, linux_block_1_stats.read_iops FROM linux_block_1_stats WHERE linux_block_1_stats.run_id = 'ProfileData-fixture-20260727-180221'" --execute
 ```
 
+Two traps seen on a dev machine (2026-10-16):
+
+- **WSL must be version 2.** Check with `wsl -l -v`. Under WSL1 every insert fails
+  (`filesystem error: in rename: Permission denied`, exit code 5). If the WSL2 kernel is
+  missing, run `wsl --update`, then `wsl --set-version Ubuntu-24.04 2`.
+- **Not Ubuntu's own `clickhouse-server` package.** `apt install clickhouse-server`
+  gives version 18.16 (2018), which has no window functions, so the views cannot be
+  made. Use the Docker image above, or ClickHouse's own apt repository with version 25.6
+  pinned. Installed with apt, start it with `sudo systemctl enable --now
+  clickhouse-server`, and keep an Ubuntu terminal open: WSL stops Ubuntu, and ClickHouse
+  with it, when the last one closes.
+
 ## Test
 
 ```bash

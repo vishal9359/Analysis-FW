@@ -67,7 +67,7 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
   `python tools/catalog.py check`. The block_2 proto was fixed (`BiOpFlags`) and gained
   the latency thresholds `lat_option_us_1` … `_16`.
 
-### Built, tested only on simulated runs (2026-10-15)
+### Built, tested on simulated runs (2026-10-15; on a real ClickHouse 2026-10-16)
 
 - **`analysis/`** — step 0 (find the run's database, compare its columns with the
   catalog), per-run views, per-run WrenAI data models, check C1 on WrenAI's SQL.
@@ -77,17 +77,21 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
 - **What testing WrenAI showed** ([phase1-design.md](phase1-design.md) §6): strict mode
   let a database-qualified name reach a raw table, so C1 checks every table of the
   final SQL; `ref_sql` was dropped (WrenAI rewrote our ClickHouse SQL); WrenAI rewrites
-  some functions (`toStartOfMinute` → `dateTrunc('MINUTE', …)`), not yet confirmed on
-  ClickHouse.
-- **Never run against a real ClickHouse yet:** the view SQL and WrenAI's SQL have only
-  been parsed. The first dev machine has no ClickHouse.
+  some functions (`toStartOfMinute` → `dateTrunc('MINUTE', …)`); on ClickHouse 25.6 the
+  two give the same result.
+- **Run on a real ClickHouse (2026-10-16):** ClickHouse 25.6.13.41 in WSL2 on a dev
+  machine, with the simulated run from `tests/make_fixture.py` loaded into a database of
+  its own (`profile_fw_sim`, 30,514 rows). `check-run` found it; `prepare` made both views
+  and reported "sum of changes = last minus first" for all 16 + 180 counters;
+  `plan … --execute` ran WrenAI's SQL, and its IOPS, MiB/s and latency equalled a
+  calculation on the raw table on all 999 rows. C1 refused a raw table and a table
+  function. Nothing needed fixing. Not yet run on a real run (step 2 below).
 
 ### Next, in order
 
-1. **On a machine with ClickHouse** (WSL2; README, "Phase 1"): load a simulated run into
-   a database of its own; run `check-run`, `prepare` (it must report "sum of changes =
-   last minus first"), and `plan … --execute`. Fix whatever ClickHouse rejects. Confirm
-   `dateTrunc('MINUTE', ts)` works.
+1. ~~**On a machine with ClickHouse** (WSL2; README, "Phase 1"): load a simulated run
+   into a database of its own; run `check-run`, `prepare` and `plan … --execute`.~~
+   **Done (2026-10-16)** — see above.
 2. **On the office box**, with a real FIO run captured with the new protos: the same
    commands; compare `plan --execute`'s numbers with the existing Grafana panel; run
    `plan-file` under `strace -f -e trace=connect` — no connections expected.
@@ -124,6 +128,10 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
   exist (removed on the `query` branch).
 - Loading a run into a table made from an older proto fails as a database error
   (exit 5), though the cause is the schema. One database per run avoids it.
+- `tests/make_fixture.py` fills every number as a growing running total, so in a
+  simulated run the settings (`lat_option_us_*`) and gauges (`in_flight_io_count`) grow
+  too. Fine for testing the views; not for testing latency bucket labels, or checks on
+  gauges (C2).
 - Branches `query` and `go_version` stopped in August 2026 and lack the
   repeated-inside-repeated support (ADR-0010).
 

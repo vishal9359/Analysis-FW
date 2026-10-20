@@ -271,8 +271,8 @@ connection and no network.
   table in WrenAI's final SQL and refuses anything but the run's own views (section 9).
   The LLM's query must also name data models alone, without a database.
 - **It rewrites some ClickHouse functions** on the way through: `toStartOfMinute(ts)`
-  came out as `dateTrunc('MINUTE', ts)`. Probably equivalent; confirmed only by running
-  such a query on the office box.
+  came out as `dateTrunc('MINUTE', ts)`. Equivalent: on ClickHouse 25.6 both gave the
+  same per-minute totals (2026-10-16).
 
 **Why that is worth having:** a metric's formula is written once, in the catalog, and
 the LLM asks for `read_iops` by name instead of writing the formula each time — so it
@@ -468,8 +468,8 @@ code that talks to the LLM.
 |---|---|---|---|
 | 0 | team | The prerequisites above | — |
 | 1 | team | Catalog reviewed | `python tools/catalog.py check` passes; no `todo` left in the columns the trial uses |
-| 2 | AI (OURS) | Step 0, and the per-interval views generated for a run | On a real run, the sum of the changes equals last minus first; an older run's missing columns are reported. *Built 2026-10-15, tested on simulated runs; real run pending* |
-| 3 | AI (OURS) | WrenAI data models generated for a run; WrenAI plans a query; C1 on its SQL | A hand-written query on the data models plans and runs; `strace` shows WrenAI opens no network connection. *Built 2026-10-15, tested on simulated runs; `ref_sql` tried and dropped (section 6); office box pending* |
+| 2 | AI (OURS) | Step 0, and the per-interval views generated for a run | On a real run, the sum of the changes equals last minus first; an older run's missing columns are reported. *Built 2026-10-15; passed with a simulated run on a real ClickHouse 2026-10-16; real run pending* |
+| 3 | AI (OURS) | WrenAI data models generated for a run; WrenAI plans a query; C1 on its SQL | A hand-written query on the data models plans and runs; `strace` shows WrenAI opens no network connection. *Built 2026-10-15; with a simulated run on a real ClickHouse a query planned and ran, and matched the raw table (2026-10-16); `ref_sql` tried and dropped (section 6); `strace` on the office box pending* |
 | 4 | AI (OURS) | The request runner, steps 1–7 | One request end to end, from request file to Grafana panel |
 | 5 | team + AI | 10 trial requests with answers, and scoring | A score report |
 | 6 | together | Decision: keep WrenAI, switch to Cube Core, or do step 4 ourselves | — |

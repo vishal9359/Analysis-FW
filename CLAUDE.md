@@ -107,10 +107,10 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
   Measurement Catalog for `linux_block_1_stats` and `linux_block_2_misc` with the team's
   answers. Decided: each run is loaded into a database of its own, and its views live
   there.
-- **Built, never yet run on a real ClickHouse:** `analysis/` — step 0, per-run views,
-  per-run WrenAI data models, check C1 (design build order §13, steps 2–3).
-- **Next:** run steps 2–3 on a machine with ClickHouse (docs/development.md, "Phase 1": WSL2 and a
-  simulated run), then on the office box with a real run; then build step 4, the
+- **Built, run on a simulated run only:** `analysis/` — step 0, per-run views,
+  per-run WrenAI data models, check C1 (design build order §13, steps 2–3). All of it
+  worked on a real ClickHouse 25.6 in WSL2 (2026-10-16); never yet on a real run.
+- **Next:** steps 2–3 on the office box with a real run; then build step 4, the
   request runner (our LLM, Grafana writer, checks C2 and C3).
 - **Waiting on the team:** catalog Q2 (block_2 sizes before or after splitting); the
   existing Grafana dashboards exported as JSON (the answer key).
