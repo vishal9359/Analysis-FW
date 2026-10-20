@@ -15,7 +15,7 @@
 
 table: linux_block_2_misc
 proto: linux_block_2_misc.proto
-schema_fingerprint: sha256:fe036da53392ef55
+schema_fingerprint: sha256:cc78c850e8dc5504
 collector: blk_bio_queue
 component: 101
 collected_from: 'eBPF: tp_btf/block_bio_queue (a bio is submitted: bio counts, sizes, REQ_* flags) and
@@ -97,9 +97,13 @@ questions:
     fixed, or set per run - and if per run, where are they recorded? Without them the latency
     histograms cannot be read.'
   answer: 'Set per run by the user, in microseconds: for example profile_fw -lat-buckets 1,10,100,1000.
-    Up to 16 thresholds, so up to 17 buckets. Every row stores them in lat_option_us_1 to
-    lat_option_us_16; there is one set, so the same thresholds apply to all four latency
-    histograms. (Team, 2026-10-12)'
+    Up to 16 thresholds, so up to 17 buckets; there is one set, so the same thresholds apply
+    to all four latency histograms. (Team, 2026-10-12) They are not in the rows: the profiler
+    writes them to latency_bucket_options.yaml (keys lat_option_us_1 to lat_option_us_n), and
+    the loader stores them in the latency_buckets table, one row per bucket, with a range label
+    such as 100 µs - 1 ms (ADR-0011).'
+  note: Corrected on 2026-10-20. This answer was first read as 16 columns in every row; the first
+    real run has none, and has the latency_buckets table.
 - id: Q12
   question: 'Latency bucket names: does ''lh'' in latency_lh_opt1 mean ''lower than''? Does ''bw''
     mean ''between'', and is each lower bound included?'
@@ -136,6 +140,8 @@ questions:
     microseconds - and the last range is counted in latency_overflow. Unused thresholds are 0.
     (Team, 2026-10-15) So the buckets past the last threshold given (here latency_bw_opt4_and_opt5
     and later) stay 0 - our reading.'
+  note: latency_buckets holds only the thresholds given - n thresholds give n+1 rows (ADR-0011) -
+    so an unused threshold is simply not there.
 - id: Q17
   question: 'An average time per I/O needs a count to divide read_device_time_ns (or
     read_block_driver_time_ns) by. Which is right: the completed requests - the sum of the read
@@ -337,20 +343,6 @@ tables:
     kind: counter
     status: draft
     basis: Linux kernel include/linux/blk_types.h (REQ_* flags); team answer to Q9 (2026-10-15)
-  - group: Latency bucket thresholds
-    columns: [lat_option_us_1, lat_option_us_2, lat_option_us_3, lat_option_us_4, lat_option_us_5,
-      lat_option_us_6, lat_option_us_7, lat_option_us_8, lat_option_us_9, lat_option_us_10, lat_option_us_11,
-      lat_option_us_12, lat_option_us_13, lat_option_us_14, lat_option_us_15, lat_option_us_16]
-    type: UInt64
-    meaning: 'The latency bucket thresholds given with -lat-buckets when the profiler was started,
-      smallest first: lat_option_us_1 is the first threshold. They label the four latency histograms
-      below: with -lat-buckets 1,10,100,1000, latency_lh_opt1 = below 1 microsecond and
-      latency_bw_opt1_and_opt2 = 1 to 10 microseconds. Unused thresholds are 0 (Q16). Set once per
-      run, so every row of a run holds the same values (assumed).'
-    unit: microseconds
-    kind: setting
-    status: draft
-    basis: team answers to Q11 and Q16
   - group: Read device latency buckets
     columns: [read_device_latency_latency_lh_opt1, read_device_latency_latency_bw_opt1_and_opt2,
       read_device_latency_latency_bw_opt2_and_opt3, read_device_latency_latency_bw_opt3_and_opt4,
@@ -362,15 +354,17 @@ tables:
       read_device_latency_latency_bw_opt14_and_opt15, read_device_latency_latency_bw_opt15_and_opt16,
       read_device_latency_latency_overflow]
     type: UInt64
-    meaning: 'Read requests counted by their latency in the device. The thresholds are
-      lat_option_us_1 to lat_option_us_16, in microseconds: lh_opt1 = below lat_option_us_1;
-      bw_optN_and_optM = from lat_option_us_N (included) up to lat_option_us_M; overflow = from
-      the last threshold given up, and the buckets past it stay 0 (Q16). Each request is counted in one bucket, so together they count the
+    meaning: 'Read requests counted by their latency in the device. The ranges are
+      in the latency_buckets table, one row per bucket (ADR-0011): option_index 0 is lh_opt1
+      (below the first threshold), i is bw_opt<i>_and_opt<i+1>, and n - the number of thresholds
+      given - is overflow; its range column labels the bucket, for example 1-10 µs. Each lower
+      bound is included (Q12), and the buckets past the last threshold given stay 0 (Q16). Each
+      request is counted in one bucket, so together they count the
       completed reads (Q13). Collected separately from read_device_time_ns (Q8).'
     unit: count
     kind: counter
     status: draft
-    basis: team answers to Q8 and Q11 to Q13; field names
+    basis: team answers to Q8 and Q11 to Q13; ADR-0011; field names
     note: Fewer than 16 thresholds - see Q16.
   - group: Read driver latency buckets
     columns: [read_driver_latency_latency_lh_opt1, read_driver_latency_latency_bw_opt1_and_opt2,
@@ -383,15 +377,17 @@ tables:
       read_driver_latency_latency_bw_opt14_and_opt15, read_driver_latency_latency_bw_opt15_and_opt16,
       read_driver_latency_latency_overflow]
     type: UInt64
-    meaning: 'Read requests counted by their latency in the driver layer. The thresholds are
-      lat_option_us_1 to lat_option_us_16, in microseconds: lh_opt1 = below lat_option_us_1;
-      bw_optN_and_optM = from lat_option_us_N (included) up to lat_option_us_M; overflow = from
-      the last threshold given up, and the buckets past it stay 0 (Q16). Each request is counted in one bucket, so together they count the
+    meaning: 'Read requests counted by their latency in the driver layer. The ranges are
+      in the latency_buckets table, one row per bucket (ADR-0011): option_index 0 is lh_opt1
+      (below the first threshold), i is bw_opt<i>_and_opt<i+1>, and n - the number of thresholds
+      given - is overflow; its range column labels the bucket, for example 1-10 µs. Each lower
+      bound is included (Q12), and the buckets past the last threshold given stay 0 (Q16). Each
+      request is counted in one bucket, so together they count the
       completed reads (Q13). Collected separately from read_block_driver_time_ns (Q8).'
     unit: count
     kind: counter
     status: draft
-    basis: team answers to Q8 and Q11 to Q13; field names
+    basis: team answers to Q8 and Q11 to Q13; ADR-0011; field names
     note: Fewer than 16 thresholds - see Q16.
   - group: 'Write size buckets: aligned sizes'
     columns: [write_lt_4kb, write_4kb, write_8kb, write_16kb, write_32kb, write_64kb, write_128kb,
@@ -451,15 +447,17 @@ tables:
       write_device_latency_latency_bw_opt14_and_opt15, write_device_latency_latency_bw_opt15_and_opt16,
       write_device_latency_latency_overflow]
     type: UInt64
-    meaning: 'Write requests counted by their latency in the device. The thresholds are
-      lat_option_us_1 to lat_option_us_16, in microseconds: lh_opt1 = below lat_option_us_1;
-      bw_optN_and_optM = from lat_option_us_N (included) up to lat_option_us_M; overflow = from
-      the last threshold given up, and the buckets past it stay 0 (Q16). Each request is counted in one bucket, so together they count the
+    meaning: 'Write requests counted by their latency in the device. The ranges are
+      in the latency_buckets table, one row per bucket (ADR-0011): option_index 0 is lh_opt1
+      (below the first threshold), i is bw_opt<i>_and_opt<i+1>, and n - the number of thresholds
+      given - is overflow; its range column labels the bucket, for example 1-10 µs. Each lower
+      bound is included (Q12), and the buckets past the last threshold given stay 0 (Q16). Each
+      request is counted in one bucket, so together they count the
       completed writes (Q13). Collected separately from write_device_time_ns (Q8).'
     unit: count
     kind: counter
     status: draft
-    basis: team answers to Q8 and Q11 to Q13; field names
+    basis: team answers to Q8 and Q11 to Q13; ADR-0011; field names
     note: Fewer than 16 thresholds - see Q16.
   - group: Write driver latency buckets
     columns: [write_driver_latency_latency_lh_opt1, write_driver_latency_latency_bw_opt1_and_opt2,
@@ -472,15 +470,17 @@ tables:
       write_driver_latency_latency_bw_opt14_and_opt15, write_driver_latency_latency_bw_opt15_and_opt16,
       write_driver_latency_latency_overflow]
     type: UInt64
-    meaning: 'Write requests counted by their latency in the driver layer. The thresholds are
-      lat_option_us_1 to lat_option_us_16, in microseconds: lh_opt1 = below lat_option_us_1;
-      bw_optN_and_optM = from lat_option_us_N (included) up to lat_option_us_M; overflow = from
-      the last threshold given up, and the buckets past it stay 0 (Q16). Each request is counted in one bucket, so together they count the
+    meaning: 'Write requests counted by their latency in the driver layer. The ranges are
+      in the latency_buckets table, one row per bucket (ADR-0011): option_index 0 is lh_opt1
+      (below the first threshold), i is bw_opt<i>_and_opt<i+1>, and n - the number of thresholds
+      given - is overflow; its range column labels the bucket, for example 1-10 µs. Each lower
+      bound is included (Q12), and the buckets past the last threshold given stay 0 (Q16). Each
+      request is counted in one bucket, so together they count the
       completed writes (Q13). Collected separately from write_block_driver_time_ns (Q8).'
     unit: count
     kind: counter
     status: draft
-    basis: team answers to Q8 and Q11 to Q13; field names
+    basis: team answers to Q8 and Q11 to Q13; ADR-0011; field names
     note: Fewer than 16 thresholds - see Q16.
 metrics:
 - metric: read_split_share_pct

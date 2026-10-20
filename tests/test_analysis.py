@@ -77,9 +77,9 @@ def full_run(cat, **changes):
 def test_catalog_reads_every_column(cat):
     assert set(cat.shared) >= {"run_id", "ts", "hostname"}
     assert len(cat.tables[B1].columns) == 18
-    assert len(cat.tables[B2].columns) == 196          # groups count once per column
+    assert len(cat.tables[B2].columns) == 180          # groups count once per column
     assert cat.tables[B2].columns["read_4kb"].kind == "counter"
-    assert cat.tables[B2].columns["lat_option_us_1"].kind == "setting"
+    assert cat.tables[B2].columns["read_device_latency_latency_overflow"].kind == "counter"
     assert cat.tables[B1].counts_since == "boot"
     assert cat.tables[B2].counts_since == "profiler start"
     assert {m.name for m in cat.tables[B1].metrics} >= {"read_iops", "avg_read_latency_ms"}
@@ -151,9 +151,12 @@ def test_commands_take_a_path_and_db(cat, monkeypatch, capsys):
 
 
 def test_step0_older_run_and_proto_changes(cat):
-    def older_block2(cols):                 # a run from before the thresholds were added
-        for i in range(1, 17):
-            del cols[f"lat_option_us_{i}"]
+    merges = ["read_bio_back_merges", "write_bio_back_merges",
+              "read_bio_front_merges", "write_bio_front_merges"]
+
+    def older_block2(cols):                 # a run from before the merge counters were added
+        for name in merges:
+            del cols[name]
         cols["brand_new_field"] = "UInt64"
 
     def retyped_block1(cols):
@@ -161,7 +164,7 @@ def test_step0_older_run_and_proto_changes(cat):
 
     run = full_run(cat, **{B2: older_block2, B1: retyped_block1})
     b2 = run.tables[B2]
-    assert b2.not_collected == [f"lat_option_us_{i}" for i in range(1, 17)]
+    assert b2.not_collected == merges
     assert b2.not_described == ["brand_new_field"]
     assert run.problems == ["linux_block_1_stats.read_io_count: catalog UInt64, run UInt32"]
 
@@ -195,10 +198,26 @@ def test_view_profiler_counters_start_at_zero(cat):
     b2 = full_run(cat).tables[B2]
     assert partition_keys(b2) == ["run_id", "hostname"]
     names = {c.name for c in view_columns(b2, cat)}
-    assert {"read_bios_delta", "lat_option_us_1", "read_4kb_delta"} <= names
-    assert "lat_option_us_1_delta" not in names         # a setting is never differenced
+    assert {"read_bios_delta", "read_4kb_delta"} <= names
     sql = create_view_sql(DB, b2, cat)
     assert "if(__rn = 1, toInt64(`read_bios`), " in sql
+
+
+def test_view_shows_a_setting_as_is(cat):
+    """A setting - chosen when the profiler started, fixed for the run - is never
+    differenced. The block tables have none today (their latency thresholds are rows of
+    latency_buckets), so a copy of the catalog gets one."""
+    import copy
+    cat2 = copy.deepcopy(cat)
+    cat2.tables[B2].columns["chosen_threshold_us"] = catalog_mod.Column(
+        "chosen_threshold_us", "UInt64", "A threshold chosen when the profiler started.",
+        "microseconds", "setting", "draft")
+
+    def with_setting(cols):
+        cols["chosen_threshold_us"] = "UInt64"
+    db = FakeDB({DB: run_db(**{B2: with_setting})}, {DB: {RUN}})
+    names = {c.name for c in view_columns(check_run(db, RUN, cat2).tables[B2], cat2)}
+    assert "chosen_threshold_us" in names and "chosen_threshold_us_delta" not in names
 
 
 def test_view_has_only_the_columns_the_run_has(cat):

@@ -165,12 +165,14 @@ to review them is in [knowledge/README.md](../knowledge/README.md).
 |---|---|---|
 | `_common.yaml` | 9 shared columns | draft |
 | `linux_block_1_stats.yaml` | 18 | 15 draft · 3 confirmed · all 3 questions answered · 10 metrics (IOPS, MiB/s, average latency, average size, busy %, queue depth) |
-| `linux_block_2_misc.yaml` | 196 (18 single + 11 groups) | 196 draft · 14 of 17 questions answered · 4 metrics |
+| `linux_block_2_misc.yaml` | 180 (18 single + 10 groups) | 180 draft · 16 of 17 questions answered · 8 metrics |
 
-The latency histograms can now be read: their thresholds are in every row
-(`lat_option_us_1` … `lat_option_us_16`, set with `-lat-buckets`). Still open in
-`block_2`: Q2 (the team is checking), Q16 (to be read off the first real run) and Q17
-(low priority).
+The latency histograms' ranges are not in the rows. The profiler writes the thresholds
+to `latency_bucket_options.yaml`, and the loader stores them in the run's
+`latency_buckets` table, one row per bucket, with a label such as `100 µs - 1 ms`
+([ADR-0011](decisions/0011-run-level-config-sidecars.md)). Phase 1 can label the
+histograms once that table is described too ([roadmap.md](roadmap.md), "Next"). Still
+open in `block_2`: Q2 (the team is checking).
 
 ## 5. Per-interval views — removing the biggest trap (OURS)
 
@@ -183,7 +185,7 @@ writes it from the catalog:
 |---|---|
 | `kind: counter` | `<column>_delta` — the change since the previous sample. A drop (counter reset) gives "no value", never a negative. The raw total is **not** in the view. |
 | `kind: gauge` | the column as is (`in_flight_io_count`) |
-| `kind: setting` | the column as is (`lat_option_us_1` …, the latency bucket thresholds) |
+| `kind: setting` | the column as is (a value chosen when the profiler was started; the block tables have none today) |
 | `label`, `timestamp` | as is (`run_id`, `hostname`, `device`, `ts`) |
 | always | `interval_s` — seconds since the previous sample |
 | `counts_since: boot` | the first sample's change is "no value" (the total since boot is not activity in this run) |
@@ -456,12 +458,12 @@ code that talks to the LLM.
    (outside this repo) picks the database: it writes a temporary config with the
    database name and runs `python -m src <run> --config <file>`, so the loader needs
    no change. The run's views go into the same database (decided 2026-10-15).
-3. **Load one fresh FIO run** captured with the new protos, into its own database, on
-   the office box. The data stays there; building and testing here needs only the
-   output of the commands run there.
-4. **Answer the catalog questions.** `block_1`: all answered. `block_2`: 14 of 17
-   answered; Q2 is being checked by the team, Q16 is read off the first real run, and
-   Q17 is low priority.
+3. ~~**Load one fresh FIO run** captured with the new protos, into its own database, on
+   the office box.~~ **Done:** a direct-I/O random-mix FIO run with latency buckets,
+   loaded on 15 Oct; steps 2–3 ran on it on 2026-10-20. The data stays there; building
+   and testing here needs only the output of the commands run there.
+4. **Answer the catalog questions.** `block_1`: all answered. `block_2`: 16 of 17
+   answered; Q2 is being checked by the team.
 5. **Export the existing Grafana dashboards as JSON** — the answer key (section 10).
 
 ## 13. Build order
@@ -470,8 +472,8 @@ code that talks to the LLM.
 |---|---|---|---|
 | 0 | team | The prerequisites above | — |
 | 1 | team | Catalog reviewed | `python tools/catalog.py check` passes; no `todo` left in the columns the trial uses |
-| 2 | AI (OURS) | Step 0, and the per-interval views generated for a run | On a real run, the sum of the changes equals last minus first; an older run's missing columns are reported. *Built 2026-10-15; passed with a simulated run on a real ClickHouse 2026-10-16; real run pending* |
-| 3 | AI (OURS) | WrenAI data models generated for a run; WrenAI plans a query; C1 on its SQL | A hand-written query on the data models plans and runs; `strace` shows WrenAI opens no network connection. *Built 2026-10-15; with a simulated run on a real ClickHouse a query planned and ran, and matched the raw table (2026-10-16); `ref_sql` tried and dropped (section 6); `strace` on the office box pending* |
+| 2 | AI (OURS) | Step 0, and the per-interval views generated for a run | On a real run, the sum of the changes equals last minus first; an older run's missing columns are reported. *Built 2026-10-15; passed with a simulated run on a real ClickHouse 2026-10-16, and on a real run on the office box 2026-10-20* |
+| 3 | AI (OURS) | WrenAI data models generated for a run; WrenAI plans a query; C1 on its SQL | A hand-written query on the data models plans and runs; `strace` shows WrenAI opens no network connection. *Built 2026-10-15; with a simulated run on a real ClickHouse a query planned and ran, and matched the raw table (2026-10-16); queries planned and ran on a real run on the office box (2026-10-20); `ref_sql` tried and dropped (section 6); `strace` on the office box pending* |
 | 4 | AI (OURS) | The request runner, steps 1–7 | One request end to end, from request file to Grafana panel |
 | 5 | team + AI | 10 trial requests with answers, and scoring | A score report |
 | 6 | together | Decision: keep WrenAI, switch to Cube Core, or do step 4 ourselves | — |

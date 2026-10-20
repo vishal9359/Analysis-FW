@@ -41,6 +41,8 @@ questions:
     tables must use the same device.
   answer: 'The controller name given to the profiler with -dev, such as nvme1 or nvme2. The profiler
     collects from the kernel and keeps only that device''s data. (Team, 2026-10-12)'
+  note: 'The first real run (2026-10-20) holds the namespace, nvme1n1, as /sys/block names it.
+    Other tables may hold the controller name, so comparing tables needs one mapped to the other.'
 - id: Q3
   question: The fields were renamed in this proto (read_ios -> read_io_count, sectors_read ->
     read_sectors_512b, device_busy_time -> device_busy_time_ms, ...). Are the meanings unchanged
@@ -53,12 +55,14 @@ tables:
   columns:
   - column: device
     type: String
-    meaning: The device the profiler was told to watch with -dev - an NVMe controller name such
-      as nvme1. Only this device's data is kept.
+    meaning: The block device the profiler watched, by its namespace name as /sys/block shows it,
+      such as nvme1n1 - not the controller name given with -dev (nvme1). Only this device's data
+      is kept.
     unit: name
     kind: label
     status: confirmed
-    basis: profiler -dev option; team answer to Q2 (2026-10-12)
+    basis: the first real run (2026-10-20) holds nvme1n1; team answer to Q2 (2026-10-12), see its
+      note
   - column: read_io_count
     type: UInt64
     meaning: Read requests completed since boot.

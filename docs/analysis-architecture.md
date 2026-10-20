@@ -654,16 +654,17 @@ These do not exist yet, and this design needs them.
 
 An **ADR** (Architecture Decision Record) is a short file in
 [decisions/](decisions/) that records one decision and the reason for it. Once
-this architecture is agreed, these should be recorded. Numbers start at **0011**,
-because 0008 and 0009 are already used on the `query` and `go_version` branches.
+this architecture is agreed, these should be recorded. Numbers start at **0012**:
+0008 and 0009 are used on the `query` and `go_version` branches, and 0011 records
+run-level config sidecars (`latency_buckets`).
 
-- **0011** — Only catalog metrics produce numbers; the AI never does (Rule 1). The
+- **0012** — Only catalog metrics produce numbers; the AI never does (Rule 1). The
   whole checking design depends on this.
-- **0012** — Each metric has one definition, used by both Grafana and the analysis
+- **0013** — Each metric has one definition, used by both Grafana and the analysis
   (Rule 2).
-- **0013** — Every report is checked by an independent Validator that never sees
+- **0014** — Every report is checked by an independent Validator that never sees
   the Analyst's reasoning, and only the Controller sends reports out (Rule 5).
-- **0014** — The AI sits behind our own interface; whether to use an existing
+- **0015** — The AI sits behind our own interface; whether to use an existing
   framework is decided by a trial (Rule 7).
-- **0015** — Each run is read using the definitions that applied when it was
+- **0016** — Each run is read using the definitions that applied when it was
   loaded (Rule 6).

@@ -32,8 +32,13 @@ design). Boss-level activities (detailed plan:
 - Wrapper + `generic_format`/`payload` format; repeated sub-messages → child tables.
 - Batch loading of many runs; fail-fast / `--continue-on-error`; typed exit codes.
 - Multi-format timestamp parsing → RFC 3339 UTC; per-run reconciliation.
-- 30-test suite against an in-memory store; realistic time-series fixture generator.
-- `src/` layout, editable `config/config.yaml`, self-contained docs.
+- Run-level config sidecars (2026-10-12): the latency bucket thresholds in
+  `latency_bucket_options.yaml` become a `latency_buckets` table, one row per bucket
+  with a legend-ready `range` ([ADR-0011](decisions/0011-run-level-config-sidecars.md)).
+- Loader test suite (46 tests) against an in-memory store; realistic time-series
+  fixture generator.
+- `src/` layout, editable `config/config.yaml`, self-contained docs. The README is
+  the user guide; [development.md](development.md) the developer guide (2026-10-14).
 
 Run/verify: see the [README](../README.md). Carries forward into production as the
 **replay / backfill / repair** path, not the primary path.
@@ -42,8 +47,8 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
 
 **The status board for Phase 1 — keep it current.** What it must do:
 [goals-and-requirements.md](goals-and-requirements.md) (Phase 1). How:
-[phase1-design.md](phase1-design.md). Work is on branch **`phase1`** (pushed
-2026-10-16), not yet merged into `main`.
+[phase1-design.md](phase1-design.md). Work is on branch **`phase1`**, rebased onto
+`main` on 2026-10-20 (so it has `main`'s `latency_buckets` loader); not yet merged.
 
 ### Done
 
@@ -62,18 +67,21 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
   changing; the run's views live in it (2026-10-15). The team's `deploy.py` (outside
   this repo) loads a run with `python -m src <run> --config <temp config>`.
 - **Measurement Catalog** for `linux_block_1_stats` (18 columns) and
-  `linux_block_2_misc` (196 columns), with the team's answers of 2026-10-12 and
+  `linux_block_2_misc` (180 columns), with the team's answers of 2026-10-12 and
   2026-10-15: [knowledge/catalog/](../knowledge/catalog/), checked by
-  `python tools/catalog.py check`. The block_2 proto was fixed (`BiOpFlags`) and gained
-  the latency thresholds `lat_option_us_1` … `_16`.
+  `python tools/catalog.py check`. The block_2 proto was fixed (`BiOpFlags`). Its latency
+  bucket thresholds are not in the rows: the profiler writes them to
+  `latency_bucket_options.yaml`, and the loader stores them in `latency_buckets`
+  ([ADR-0011](decisions/0011-run-level-config-sidecars.md)). Corrected on 2026-10-20:
+  the catalog had described them as 16 columns of every row.
 
-### Built, tested on simulated runs (2026-10-15; on a real ClickHouse 2026-10-16)
+### Built, tested on simulated runs and one real run (2026-10-15 to 2026-10-20)
 
 - **`analysis/`** — step 0 (find the run's database, compare its columns with the
   catalog), per-run views, per-run WrenAI data models, check C1 on WrenAI's SQL.
-  Commands: `python -m analysis check-run | prepare | plan | plan-file` (README,
-  "Phase 1").
-- **`tests/test_analysis.py`** — 20 tests on a fake database; no ClickHouse.
+  Commands: `python -m analysis check-run | prepare | plan | plan-file`
+  ([development.md](development.md), "Phase 1").
+- **`tests/test_analysis.py`** — 21 tests on a fake database; no ClickHouse.
 - **What testing WrenAI showed** ([phase1-design.md](phase1-design.md) §6): strict mode
   let a database-qualified name reach a raw table, so C1 checks every table of the
   final SQL; `ref_sql` was dropped (WrenAI rewrote our ClickHouse SQL); WrenAI rewrites
@@ -85,24 +93,38 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
   and reported "sum of changes = last minus first" for all 16 + 180 counters;
   `plan … --execute` ran WrenAI's SQL, and its IOPS, MiB/s and latency equalled a
   calculation on the raw table on all 999 rows. C1 refused a raw table and a table
-  function. Nothing needed fixing. Not yet run on a real run (step 2 below).
+  function. Nothing needed fixing.
+- **Run on a real run on the office box (2026-10-20):** a direct-I/O random-mix FIO run
+  with latency buckets, in a database of its own. `check-run` found it (given the run
+  folder's path, so `--db` and path support were added); `block_1`: all 18 columns
+  usable; `prepare`: both views, "sum of changes = last minus first" for 16 + 180
+  counters; `plan … --execute`: C1 passed and the queries ran, 220 samples. It showed two
+  catalog errors, both corrected: the latency thresholds are rows of `latency_buckets`,
+  not 16 columns of `block_2` (`block_2` has 180 usable columns, not 196); and
+  `block_1`'s `device` holds the namespace, `nvme1n1`, not the controller name.
 
 ### Next, in order
 
 1. ~~**On a machine with ClickHouse** (WSL2; README, "Phase 1"): load a simulated run
    into a database of its own; run `check-run`, `prepare` and `plan … --execute`.~~
    **Done (2026-10-16)** — see above.
-2. **On the office box**, with a real FIO run captured with the new protos: the same
-   commands; compare `plan --execute`'s numbers with the existing Grafana panel; run
-   `plan-file` under `strace -f -e trace=connect` — no connections expected.
-3. **Build step 4, the request runner** ([phase1-design.md](phase1-design.md) §7):
+2. **On the office box**, with a real FIO run: ~~the same commands~~ (done 2026-10-20).
+   Still to do there: check the numbers — every row of the views against the raw
+   table, the catalog's counter relations (Q1, Q3, Q15, Q17) against the real totals, and
+   the totals against FIO's own; then run `plan-file` under `strace -f -e trace=connect`
+   — no connections expected.
+3. **Describe `latency_buckets`**, so Phase 1 can label latency histograms. It is a
+   run-level table — one row per bucket, no `ts` — so step 0, the views and the data
+   models must learn a table that gets no per-interval view, and a histogram's bucket
+   columns must be matched to its rows by `option_index` (ADR-0011).
+4. **Build step 4, the request runner** ([phase1-design.md](phase1-design.md) §7):
    `request.yaml`; steps 1, 3 and 7 with our LLM (a new `analysis/llm.py`, built like
    `tools/llm_config.py`); step 2's yes/no; step 5 with check C2; step 6, the Grafana
    writer; check C3; a record per request in `out/<run>/`.
-4. **Test set and scoring:** 10 block-layer trial requests, answers from the exported
+5. **Test set and scoring:** 10 block-layer trial requests, answers from the exported
    dashboards (below); then the trial decision: keep WrenAI, switch to Cube Core, or
    plan ourselves.
-5. **Then:** catalog the NVMe, syscall and SSD tables (`tools/catalog.py skeleton`);
+6. **Then:** catalog the NVMe, syscall and SSD tables (`tools/catalog.py skeleton`);
    grow to the 30-request acceptance set.
 
 ### Waiting on the team
@@ -122,16 +144,15 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
 - Profile FW still counts a bio under 4 KiB twice (`read_lt_4kb` and
   `read_lt_4kb_range`); they will remove one. The catalog explains how to avoid it.
 - [design.md](design.md) (the MVP loader design) is partly out of date: it mentions
-  `sut_id`, `CH_USER`/`CH_PASSWORD` and one job per `.pb` file. The code and the README
-  are right.
+  `sut_id`, `CH_USER`/`CH_PASSWORD` and one job per `.pb` file. The code and
+  [development.md](development.md) are right.
 - On `main`, `ClickHouseStore.count()` is dead code with a `sut_id` column that does not
   exist (removed on the `query` branch).
 - Loading a run into a table made from an older proto fails as a database error
   (exit 5), though the cause is the schema. One database per run avoids it.
 - `tests/make_fixture.py` fills every number as a growing running total, so in a
-  simulated run the settings (`lat_option_us_*`) and gauges (`in_flight_io_count`) grow
-  too. Fine for testing the views; not for testing latency bucket labels, or checks on
-  gauges (C2).
+  simulated run the gauges (`in_flight_io_count`) grow too. Fine for testing the views;
+  not for testing checks on gauges (C2).
 - Branches `query` and `go_version` stopped in August 2026 and lack the
   repeated-inside-repeated support (ADR-0010).
 

@@ -98,20 +98,24 @@ where it and an ADR disagree, the ADR wins.
 ## Status (keep this current)
 
 The full board — done, next, waiting, known issues — is [docs/roadmap.md](docs/roadmap.md),
-"Now — Phase 1". In short (2026-10-16):
+"Now — Phase 1". In short (2026-10-20):
 
-- **Branch:** Phase 1 work is on **`phase1`**, not yet merged into `main`. All 66 tests
-  pass (46 loader, 20 Phase 1); `python tools/catalog.py check` passes.
-- **Done:** Module 1 loader. Phase 1 requirements, tool choice (WrenAI trial, Grafana
-  draws), office-box readiness check, design ([docs/phase1-design.md](docs/phase1-design.md)),
-  Measurement Catalog for `linux_block_1_stats` and `linux_block_2_misc` with the team's
-  answers. Decided: each run is loaded into a database of its own, and its views live
-  there.
-- **Built, run on a simulated run only:** `analysis/` — step 0, per-run views,
-  per-run WrenAI data models, check C1 (design build order §13, steps 2–3). All of it
-  worked on a real ClickHouse 25.6 in WSL2 (2026-10-16); never yet on a real run.
-- **Next:** steps 2–3 on the office box with a real run; then build step 4, the
-  request runner (our LLM, Grafana writer, checks C2 and C3).
+- **Branch:** Phase 1 work is on **`phase1`**, rebased onto `main` on 2026-10-20 (it has
+  `main`'s `latency_buckets` loader); not yet merged. All 67 tests pass (46 loader,
+  21 Phase 1); `python tools/catalog.py check` passes.
+- **Done:** Module 1 loader, including run-level sidecars (`latency_buckets`,
+  ADR-0011). Phase 1 requirements, tool choice (WrenAI trial, Grafana draws), office-box
+  readiness check, design ([docs/phase1-design.md](docs/phase1-design.md)), Measurement
+  Catalog for `linux_block_1_stats` and `linux_block_2_misc` with the team's answers.
+  Decided: each run is loaded into a database of its own, and its views live there.
+- **Built and run on one real run:** `analysis/` — step 0, per-run views, per-run WrenAI
+  data models, check C1 (design build order §13, steps 2–3). Worked on a simulated run
+  on a real ClickHouse 25.6 in WSL2 (2026-10-16), then on a real run on the office box
+  (2026-10-20). That run corrected the catalog: the latency thresholds are rows of
+  `latency_buckets`, not columns of `block_2`; `device` holds `nvme1n1`.
+- **Next:** check that run's numbers (views against the raw table, counter relations,
+  FIO totals) and `strace`; describe `latency_buckets` so histograms can be labelled;
+  then build step 4, the request runner (our LLM, Grafana writer, checks C2 and C3).
 - **Waiting on the team:** catalog Q2 (block_2 sizes before or after splitting); the
   existing Grafana dashboards exported as JSON (the answer key).
 - **Deferred debt** (all tracked in ADRs): append-only reload, single-node

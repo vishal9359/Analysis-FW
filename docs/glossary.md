@@ -132,8 +132,8 @@ Design: [phase1-design.md](phase1-design.md).
 - **per-interval view** — a view made for each run, in the run's own database
   (`<table>_interval`), that turns each counter into its change since the previous
   sample (`<column>_delta`), plus `interval_s`.
-- **setting** (catalog kind) — a value chosen when the profiler was started, the same
-  in every row of a run, such as a latency bucket threshold (`lat_option_us_1`).
+- **setting** (catalog kind) — a value chosen when the profiler was started, fixed for
+  the whole run, such as a latency bucket's threshold (`threshold_us` in `latency_buckets`).
 - **semantic layer** — software that holds what the data means (tables, columns,
   metrics, joins) and turns a query written on those meanings into real SQL.
 - **WrenAI** — the open-source semantic layer used in the trial. **It contains no AI.**

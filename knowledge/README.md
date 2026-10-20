@@ -48,7 +48,7 @@ so a family of similar columns is reviewed once.
 | `dimension` | an identifier to group by (queue, CPU core, enum) | group by it |
 | `label` | text describing the row (device, hostname) | filter or show it |
 | `timestamp` | a time | order and filter by it |
-| `setting` | a value chosen when the profiler was started, the same in every row of a run (a latency bucket threshold) | show it, e.g. as a bucket's label; **never add up or subtract** |
+| `setting` | a value chosen when the profiler was started, fixed for the whole run (such as a latency bucket's threshold, `threshold_us` in `latency_buckets`) | show it, e.g. as a bucket's label; **never add up or subtract** |
 
 ### Metrics
 
