@@ -31,7 +31,7 @@ layer, the loader picks it up with no change and no configuration.
 | | Requirement |
 |---|---|
 | **Python** | 3.10 or newer (tested on 3.12) |
-| **ClickHouse** | A running server reachable over its **HTTP port** (default `8123`). Tested against ClickHouse 25.6. |
+| **ClickHouse** | A running server reachable over its **HTTP port** (default `8123`). Tested against ClickHouse 25.6 and 26.6. |
 | **Data** | One or more `ProfileData-*` run directories produced by Profile FW |
 | **Disk** | Only for the input data — the loader streams it and keeps nothing |
 

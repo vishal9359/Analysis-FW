@@ -208,8 +208,8 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
   stand-in. Shell commands run in Git Bash: a multi-line `python -c` or a heredoc with
   an apostrophe fails — use a script file, or the edit tools for code; add `-X utf8`
   when Python prints non-ASCII text.
-- **Office test box:** Linux (IST timezone), Python 3.12, **ClickHouse 25.6 in Docker
-  at `localhost:8123`, no password**; Grafana (container, ClickHouse plugin); WrenAI
+- **Office test box:** Linux (IST timezone), Python 3.12, **ClickHouse 26.6 in Docker
+  (26.6.1.1193, seen 2026-10-22) at `localhost:8123`, no password**; Grafana (container, ClickHouse plugin); WrenAI
   installed. ClickHouse's `default` user has no password and may log in only from the
   box itself (the Docker image's default), so another machine gets "Authentication
   failed" until its address is allowed. `tools/check_phase1_env.py` takes ClickHouse's

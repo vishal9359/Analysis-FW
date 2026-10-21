@@ -359,8 +359,10 @@ leaves a record in `out/<run>/`.
 Real profile data stays on the office box, but a simulated run works anywhere:
 
 ```bash
-# 1. ClickHouse in WSL2, the office box's version. The loader connects as the
-#    default user with no password. WSL2 forwards localhost, so Windows sees :8123.
+# 1. ClickHouse in WSL2 - 25.6 was tested here; the office box runs 26.6. The loader
+#    connects as the default user with no password. WSL2 forwards localhost, so
+#    Windows sees :8123. CLICKHOUSE_SKIP_USER_SETUP=1 lets that user in from Windows
+#    too (see the traps below).
 docker run -d --name clickhouse -p 8123:8123 --ulimit nofile=262144:262144 \
     -e CLICKHOUSE_SKIP_USER_SETUP=1 clickhouse/clickhouse-server:25.6
 
@@ -382,7 +384,7 @@ does not use. That is expected there: the run's thresholds file sets 4 threshold
 each histogram uses 5 of its 17 columns, but `tests/make_fixture.py` fills all 17. The
 real profiler leaves the unused ones at 0.
 
-Two traps seen on a dev machine (2026-10-16):
+Traps seen on a dev machine (2026-10-16) and the office box (2026-10-22):
 
 - **WSL must be version 2.** Check with `wsl -l -v`. Under WSL1 every insert fails
   (`filesystem error: in rename: Permission denied`, exit code 5). If the WSL2 kernel is
@@ -393,6 +395,13 @@ Two traps seen on a dev machine (2026-10-16):
   pinned. Installed with apt, start it with `sudo systemctl enable --now
   clickhouse-server`, and keep an Ubuntu terminal open: WSL stops Ubuntu, and ClickHouse
   with it, when the last one closes.
+- **"Authentication failed: password is incorrect, or there is no user with such name"
+  from another machine.** Started without `CLICKHOUSE_SKIP_USER_SETUP=1` or a password,
+  the ClickHouse Docker image lets the `default` user in only from the machine it runs
+  on, and says nothing more in the error. To let one more machine in, the container
+  needs a file in `/etc/clickhouse-server/users.d/` listing that machine's address in
+  the user's `<networks>`, next to the ones `host_ip` in `system.users` shows. The file
+  is lost when the container is made again, unless it is mounted from outside.
 
 ## Test
 
