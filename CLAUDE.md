@@ -208,9 +208,11 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
   stand-in. Shell commands run in Git Bash: a multi-line `python -c` or a heredoc with
   an apostrophe fails — use a script file, or the edit tools for code; add `-X utf8`
   when Python prints non-ASCII text.
-- **Office test box:** Linux (IST timezone), Python 3.12, **ClickHouse 25.6 in Docker
-  at `localhost:8123`, no password**; Grafana (container, ClickHouse plugin); WrenAI
-  installed. The user pulls the repo there to run against real data, which never
+- **Office test box:** Linux (IST timezone), Python 3.12, **ClickHouse 25.6 on HTTP port
+  8129 (as `config/config.yaml` there says), no password**; Grafana (container,
+  ClickHouse plugin); WrenAI installed. `tools/check_phase1_env.py` does not read
+  `config/config.yaml`: it needs the same port in the `"clickhouse"` block of
+  `tools/config.json`, and a run's database there. The user pulls the repo there to run against real data, which never
   leaves it. Runs are loaded one database per run by the team's `deploy.py`. The
   company LLM gateway is OpenAI-compatible, serves only `/chat/completions` and needs
   custom headers — all in `tools/config.json`. Python `requests` needs

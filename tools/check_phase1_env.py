@@ -38,7 +38,11 @@ optional "clickhouse" and "grafana" blocks. Environment variables CH_URL,
 CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE, GRAFANA_URL,
 GRAFANA_TOKEN, GRAFANA_USER and GRAFANA_PASSWORD override the file.
 Defaults: ClickHouse at http://localhost:8123 (user default, database
-profile_fw), Grafana at http://localhost:3000.
+profile_fw), Grafana at http://localhost:3000. This check does not read
+config/config.yaml, where the loader and `python -m analysis` find ClickHouse:
+give it the same host and port in the "clickhouse" block. Each run is loaded
+into a database of its own, so set "database" there to one run's database
+(or use --ch-database); the check lists the databases that hold runs.
 Behind a company proxy, set HTTPS_PROXY / NO_PROXY as usual.
 Run `python tools/check_phase1_env.py --help` for every option, and
 `python tools/check_llm.py` for a quick LLM-only check.
@@ -281,8 +285,8 @@ SELECT
 FROM
 (
     SELECT
-        toInt64(read_ios)                              AS cur,
-        toInt64(lagInFrame(read_ios) OVER w)           AS prev,
+        toInt64(__READS__)                             AS cur,
+        toInt64(lagInFrame(__READS__) OVER w)          AS prev,
         dateDiff('second', lagInFrame(ts) OVER w, ts)  AS gap,
         row_number() OVER wn                           AS rn
     FROM linux_block_1_stats
@@ -303,7 +307,11 @@ def check_clickhouse(args, ctx) -> None:
     rows, err = ch.query("SELECT version() AS version, timezone() AS tz, "
                          "currentUser() AS user", use_db=False)
     if err:
-        record(g, "connection", FAIL, f"{ch.url} - {err}")
+        record(g, "connection", FAIL,
+               f"cannot reach {ch.url}. This check takes ClickHouse's address from the "
+               f"\"clickhouse\" block of tools/config.json (or --ch-host / --ch-port), "
+               f"not from config/config.yaml: set the same host and port as there. "
+               f"Error: {err}")
         return
     info = rows[0]
     record(g, "connection", PASS,
@@ -315,7 +323,8 @@ def check_clickhouse(args, ctx) -> None:
         record(g, "permissions", WARN, f"could not read grants: {err}")
     else:
         grants = " | ".join(str(next(iter(r.values()))) for r in rows)
-        can_view = bool(re.search(r"GRANT ALL\b|CREATE VIEW|GRANT CREATE ON", grants))
+        # CREATE on its own (followed by a comma or ON) is every CREATE privilege
+        can_view = bool(re.search(r"GRANT ALL\b|CREATE VIEW|\bCREATE(?=\s*,|\s+ON\b)", grants))
         record(g, "permissions", PASS if can_view else WARN,
                ("can create views (needed for the per-interval views)" if can_view
                 else "no CREATE VIEW permission seen - the per-interval views "
@@ -337,7 +346,16 @@ def check_clickhouse(args, ctx) -> None:
            + (f"; not in the sample protos: {', '.join(extra)}" if extra else ""),
            tables=names)
     if "linux_block_1_stats" not in names:
-        record(g, "runs", SKIP, "linux_block_1_stats not found")
+        # each run is loaded into a database of its own: say which ones hold runs
+        rows, _ = ch.query("SELECT DISTINCT database FROM system.tables WHERE "
+                           "name = 'linux_block_1_stats' ORDER BY database LIMIT 20",
+                           use_db=False)
+        found = [r["database"] for r in rows or []]
+        record(g, "runs", SKIP,
+               f"linux_block_1_stats not found in {args.ch_database}"
+               + (f"; databases that have it: {', '.join(found)} - set one as "
+                  f"\"database\" in the \"clickhouse\" block of tools/config.json, or "
+                  f"use --ch-database" if found else ""))
         return
 
     rows, err = ch.query("SELECT run_id, count() AS samples, min(ts) AS first, "
@@ -377,10 +395,21 @@ def check_clickhouse(args, ctx) -> None:
                 f"({names_by_table}) - joins between them need a mapping"),
                devices=names_by_table)
 
-    rows, err = ch.query(PER_INTERVAL_SQL, {"run": ctx["run"]})
+    # the read counter's name: read_io_count since the October 2026 renames,
+    # read_ios in runs loaded before them
+    rows, _ = ch.query("SELECT name FROM system.columns WHERE database = {db:String} "
+                       "AND table = 'linux_block_1_stats'", {"db": args.ch_database},
+                       use_db=False)
+    have = {r["name"] for r in rows or []}
+    reads = next((c for c in ("read_io_count", "read_ios") if c in have), None)
+    if reads is None:
+        record(g, "per-interval query on real data", SKIP,
+               "linux_block_1_stats has neither read_io_count nor read_ios")
+        return
+    sql = PER_INTERVAL_SQL.replace("__READS__", reads)
+    rows, err = ch.query(sql, {"run": ctx["run"]})
     if err or not rows:
-        record(g, "per-interval query on real data", FAIL,
-               err or "no rows", sql=PER_INTERVAL_SQL)
+        record(g, "per-interval query on real data", FAIL, err or "no rows", sql=sql)
         return
     s = rows[0]
     total = int(s["max_minus_min"])
