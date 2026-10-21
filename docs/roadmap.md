@@ -66,6 +66,9 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
 - **Each run gets its own database** (2026-10-12) while Profile FW's protos keep
   changing; the run's views live in it (2026-10-15). The team's `deploy.py` (outside
   this repo) loads a run with `python -m src <run> --config <temp config>`.
+- **Block layer first** (decided 2026-10-20): the whole of Phase 1 — request to
+  Grafana graph — is built for the two block tables, the user reviews it, and only then
+  are the other layers added.
 - **Measurement Catalog** for `linux_block_1_stats` (18 columns) and
   `linux_block_2_misc` (180 columns), with the team's answers of 2026-10-12 and
   2026-10-15: [knowledge/catalog/](../knowledge/catalog/), checked by
@@ -81,7 +84,7 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
   catalog), per-run views, per-run WrenAI data models, check C1 on WrenAI's SQL.
   Commands: `python -m analysis check-run | prepare | plan | plan-file`
   ([development.md](development.md), "Phase 1").
-- **`tests/test_analysis.py`** — 21 tests on a fake database; no ClickHouse.
+- **`tests/test_analysis.py`** — tests on a fake database; no ClickHouse.
 - **What testing WrenAI showed** ([phase1-design.md](phase1-design.md) §6): strict mode
   let a database-qualified name reach a raw table, so C1 checks every table of the
   final SQL; `ref_sql` was dropped (WrenAI rewrote our ClickHouse SQL); WrenAI rewrites
@@ -102,36 +105,87 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
   catalog errors, both corrected: the latency thresholds are rows of `latency_buckets`,
   not 16 columns of `block_2` (`block_2` has 180 usable columns, not 196); and
   `block_1`'s `device` holds the namespace, `nvme1n1`, not the controller name.
+- **Numbers checked on that run (2026-10-20):** one sample per second for 220 s, no
+  gaps; every per-second IOPS, MiB/s and latency in the views equals a calculation on the
+  raw table (219 of 219 rows); the run's protos match the catalog exactly. In `block_2`,
+  Q1, Q3 and Q15 hold exactly: every bio was 4 KiB, and the size buckets add up to
+  `read_bios` and `write_bios`. The latency buckets add up to the bio counts in both
+  directions, and the run's 15 thresholds gave 16 rows in `latency_buckets`. `block_1`
+  and `block_2` count the same 73,263,082 I/Os and the same bytes; how they split
+  between reads and writes differs by 36 (block_1 catalog Q4). `plan-file` under
+  `strace` opened no network connection.
+
+### Built 2026-10-21 — the whole request, for the block layer; run on a simulated run only
+
+- **Step 4, the request runner:** `python -m analysis ask <request.yaml>` runs steps 0–7
+  and leaves a record per request in `out/<run>/` ([phase1-design.md](phase1-design.md)
+  §7.1). `--yes` takes the meaning as confirmed (for scoring), `--no-grafana` stops
+  before drawing. New in `analysis/`: `runner.py`; `llm.py`, the only code that calls our
+  LLM, built on `tools/llm_config.py`; `steps.py`, the prompts and the checks on each
+  answer; `grafana.py`, a folder per run, a dashboard per request, a panel from a
+  template. `checks.py` gained C1's time filter, C2 and C3.
+- **Latency histograms** ([phase1-design.md](phase1-design.md) §5.2): `latency_buckets`
+  is described (`knowledge/catalog/latency_buckets.yaml`, a run-level table: no `ts`, no
+  view). `block_2`'s four latency groups say `labels: latency_buckets`, so each run gets
+  a histogram view, `linux_block_2_misc_histograms`, with every bucket's range; the 68
+  raw bucket columns are no longer offered to our LLM. `prepare` makes the view and
+  checks that every I/O is in a labelled bucket; `tools/catalog.py check` checks the new
+  catalog keys.
+- **Example requests** in `requests/`: the five of the requirements, and a latency
+  distribution.
+- **Tests:** 93 in all — 46 for the loader, 29 in `tests/test_analysis.py`, 18 in
+  `tests/test_runner.py` (a scripted LLM and a fake Grafana); no ClickHouse, LLM or
+  Grafana needed.
+- **Run end to end on a dev machine:** ClickHouse 25.6 in WSL2 with the simulated run,
+  Grafana 13.2.4 with the ClickHouse plugin 4.23.0, and a stand-in for our LLM — scripted
+  answers, and also a fake OpenAI-compatible server, so `python -m analysis ask` ran its
+  real HTTP path with the custom headers, and no header value reached the record. Drawn,
+  checked and looked at in a browser: read and write IOPS over time; data read in the
+  last 2 minutes (a single number); the read latency distribution (a bar chart with
+  each bucket's range); slow reads over time; one line per bucket over time. A query
+  that read the raw table was refused by C1 and corrected on the next try, and asking
+  again replaced the same dashboard. Fixed on the way: a dashboard now shows the
+  result's own time range, as one table can end before the run does.
+- **Not yet run with our LLM.** The prompts of steps 1, 3 and 7 meet the real model only
+  on the office box (next, below).
 
 ### Next, in order
 
 1. ~~**On a machine with ClickHouse** (WSL2; README, "Phase 1"): load a simulated run
    into a database of its own; run `check-run`, `prepare` and `plan … --execute`.~~
    **Done (2026-10-16)** — see above.
-2. **On the office box**, with a real FIO run: ~~the same commands~~ (done 2026-10-20).
-   Still to do there: check the numbers — every row of the views against the raw
-   table, the catalog's counter relations (Q1, Q3, Q15, Q17) against the real totals, and
-   the totals against FIO's own; then run `plan-file` under `strace -f -e trace=connect`
-   — no connections expected.
-3. **Describe `latency_buckets`**, so Phase 1 can label latency histograms. It is a
-   run-level table — one row per bucket, no `ts` — so step 0, the views and the data
-   models must learn a table that gets no per-interval view, and a histogram's bucket
-   columns must be matched to its rows by `option_index` (ADR-0011).
-4. **Build step 4, the request runner** ([phase1-design.md](phase1-design.md) §7):
-   `request.yaml`; steps 1, 3 and 7 with our LLM (a new `analysis/llm.py`, built like
-   `tools/llm_config.py`); step 2's yes/no; step 5 with check C2; step 6, the Grafana
-   writer; check C3; a record per request in `out/<run>/`.
-5. **Test set and scoring:** 10 block-layer trial requests, answers from the exported
+2. ~~**On the office box**, with a real FIO run: the same commands, then check the
+   numbers and run `plan-file` under `strace`.~~ **Done (2026-10-20)** — see above.
+   Still open: compare the run's totals with FIO's own summary.
+3. ~~**Describe `latency_buckets`**, so Phase 1 can label latency histograms.~~
+   **Done (2026-10-21)** — see above.
+4. ~~**Build step 4, the request runner.**~~ **Built (2026-10-21)** — see above.
+5. **On the office box, with our LLM and the real run:** set `grafana.token` in
+   `tools/config.json`; run `prepare <run>` again (it now makes the histogram view, and
+   on a real run should find no I/O in an unused bucket column — catalog Q16); run
+   `python -m analysis ask <file> --run <run>` on each file in `requests/`. The printed
+   output and the records in `out/<run>/` show how our LLM reads the prompts: tune them
+   from there. Then the user reviews the block layer.
+6. **Test set and scoring:** 10 block-layer trial requests, answers from the exported
    dashboards (below); then the trial decision: keep WrenAI, switch to Cube Core, or
    plan ourselves.
-6. **Then:** catalog the NVMe, syscall and SSD tables (`tools/catalog.py skeleton`);
-   grow to the 30-request acceptance set.
+7. **After the block-layer review:** catalog the other tables the real run has (`tools/catalog.py skeleton`,
+   after copying their `.proto` files into `tests/sample_protos/`): NVMe, syscall and
+   SSD, and the newer ones — `linux_block_3_sync`, the filesystem tables
+   (`linux_ext4fs_1_iostats`, `_2_sync`, `_3_buffered`, `linux_fs_1_readahead`,
+   `linux_fs_2_writepages`) and `linux_platform_1_stats` (CPU, GPU, NIC, RDMA, process).
+   With the filesystem tables, requests such as "latency for filesystem and block" become
+   answerable. Then grow to the 30-request acceptance set.
 
 ### Waiting on the team
 
-- **Catalog Q2** (`linux_block_2_misc`): are bio sizes counted before or after
-  splitting? The team is checking.
 - **E2:** the existing Grafana dashboards exported as JSON — the answer key.
+- **A Grafana service-account token** (Editor role), in `tools/config.json` as
+  `grafana.token`, for the Grafana writer (step 6).
+- *Answered on 2026-10-20:* catalog Q2 (sizes and bytes are counted when a bio is
+  submitted, before any split) and Q4 (a few I/Os may differ between collectors; accepted).
+  Every catalog question is answered. A run with large bios (FIO `bs=4M`) would still
+  settle Q17 fully.
 - **Optional:** review the draft catalog entries and set `status: confirmed`.
 - Real profile data stays on the office box: anything that needs it runs there, and
   only the commands' output comes back.
@@ -152,7 +206,17 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
   (exit 5), though the cause is the schema. One database per run avoids it.
 - `tests/make_fixture.py` fills every number as a growing running total, so in a
   simulated run the gauges (`in_flight_io_count`) grow too. Fine for testing the views;
-  not for testing checks on gauges (C2).
+  not for testing checks on gauges (C2). It also fills all 17 latency-bucket columns,
+  though its file sets 4 thresholds (5 buckets), so `prepare` warns that I/Os are in
+  unused columns — expected on a simulated run only. Its tables also differ in length
+  (`block_1` 1,000 samples, `block_2` 400).
+- The prompts of steps 1, 3 and 7 are not yet tried with our LLM (office box only).
+- **Profile FW still writes timestamps as local time + `Z` + offset**
+  (`2026-10-15T08:27:30.929Z00:00`, seen 2026-10-20), which is not valid RFC 3339. The
+  loader drops what follows `Z` and reads the time as UTC, so `ts` is right only when the
+  SUT's clock is set to UTC, as it was for that run. A SUT on IST would be stored
+  5 h 30 min off. The fix is on the producer side:
+  [timestamp-format.md](timestamp-format.md).
 - Branches `query` and `go_version` stopped in August 2026 and lack the
   repeated-inside-repeated support (ADR-0010).
 

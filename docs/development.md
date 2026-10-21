@@ -323,12 +323,14 @@ string is still kept in the `timestamp` column). See
 ## Phase 1 — plain-language request to graph (in progress)
 
 Code in `analysis/`; design in [phase1-design.md](phase1-design.md); status and next
-steps in [roadmap.md](roadmap.md) ("Now — Phase 1"). Built so far: step 0 (find the
-run's database, compare its columns with the catalog), the run's per-interval views,
-the run's WrenAI data models, and check C1. `pip install -r requirements.txt` brings
-WrenAI (pinned to 0.15.0; it contains no AI).
+steps in [roadmap.md](roadmap.md) ("Now — Phase 1"). Built for the block layer: the
+whole request — step 0 (find the run's database, compare its columns with the catalog),
+our LLM's steps 1, 3 and 7, the run's per-interval and histogram views, the run's
+WrenAI data models, checks C1 to C3, and the Grafana panel. `pip install -r
+requirements.txt` brings WrenAI (pinned to 0.15.0; it contains no AI).
 
 ```bash
+python -m analysis ask requests/io-counts.yaml   # the whole request, to a Grafana panel
 python -m analysis check-run <run>         # where the run is, what it has (read-only)
 python -m analysis prepare <run>           # makes the run's views, checks they add up
 python -m analysis plan <run> "<query>"    # WrenAI plans it, check C1; --execute runs it
@@ -341,6 +343,16 @@ run; `--db <name>` looks in that one only. A query is written on the data models
 example `SELECT linux_block_1_stats.ts, linux_block_1_stats.read_iops FROM
 linux_block_1_stats WHERE linux_block_1_stats.run_id = '<run>'`. Only the ClickHouse
 host and port come from `config/config.yaml`; its database name is not used here.
+
+`ask` reads a request file — `run:` and `request:`, and optionally `db:`; there are
+examples in `requests/`. `--run <run>` and `--db <name>` replace the file's, so one
+request file serves any run. It shows what it understood and asks yes or no before
+anything runs (`--yes` skips the question; `--no-grafana` stops before drawing). It needs our LLM
+and Grafana, set in `tools/config.json` (copy `tools/config.example.json`): `llm` as for
+the readiness checks, and `grafana.url` and `grafana.token`, a service-account token
+with the Editor role. Our LLM is reached only from the office box, so on a dev machine
+`ask` runs in the tests, with a scripted LLM (`tests/test_runner.py`). Each request
+leaves a record in `out/<run>/`.
 
 ### Trying it on your own machine (ClickHouse in WSL2)
 
@@ -365,6 +377,11 @@ python -m analysis prepare   ProfileData-fixture-20260727-180221
 python -m analysis plan ProfileData-fixture-20260727-180221 "SELECT linux_block_1_stats.ts, linux_block_1_stats.read_iops FROM linux_block_1_stats WHERE linux_block_1_stats.run_id = 'ProfileData-fixture-20260727-180221'" --execute
 ```
 
+On the simulated run, `prepare` warns that I/Os are in latency-bucket columns the run
+does not use. That is expected there: the run's thresholds file sets 4 thresholds, so
+each histogram uses 5 of its 17 columns, but `tests/make_fixture.py` fills all 17. The
+real profiler leaves the unused ones at 0.
+
 Two traps seen on a dev machine (2026-10-16):
 
 - **WSL must be version 2.** Check with `wsl -l -v`. Under WSL1 every insert fails
@@ -386,5 +403,6 @@ python -m pytest tests/ -v
 Tests run the whole pipeline against an in-memory store — no database needed.
 `tests/make_fixture.py` generates sample runs from `tests/sample_protos/`; pass
 `--protos <dir>` to generate from the real protos instead. `tests/test_analysis.py`
-covers Phase 1 on a fake database; the tests that need WrenAI are skipped when it is
-not installed.
+covers Phase 1's step 0, views, data models, C1 and `prepare` on a fake database;
+`tests/test_runner.py` covers the request runner with a scripted LLM and a fake
+Grafana. The tests that need WrenAI are skipped when it is not installed.

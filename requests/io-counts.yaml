@@ -1,0 +1,6 @@
+# Example request 1 of the requirements (docs/goals-and-requirements.md).
+# From the repo root, naming your run - the run folder's name or its path:
+#   python -m analysis ask requests/io-counts.yaml --run <run folder>
+# (without --run, the run below is used: the simulated run of docs/development.md).
+run: ProfileData-fixture-20260727-180221
+request: Show me all read-write I/O counts.

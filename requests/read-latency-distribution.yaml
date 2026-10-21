@@ -1,0 +1,7 @@
+# A latency histogram, labelled with the run's own bucket ranges (latency_buckets).
+# Needs a run profiled with -lat-buckets. Expected: a bar chart, one bar per range.
+# From the repo root, naming your run - the run folder's name or its path:
+#   python -m analysis ask requests/read-latency-distribution.yaml --run <run folder>
+# (without --run, the run below is used: the simulated run of docs/development.md).
+run: ProfileData-fixture-20260727-180221
+request: Show the read latency distribution on the device for the whole run.

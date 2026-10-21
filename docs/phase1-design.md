@@ -1,7 +1,8 @@
 # Phase 1 design — plain-language request to Grafana graph
 
 **Status:** draft for review (2026-10-10; updated 2026-10-12 with the team's answers;
-steps 2–3 built 2026-10-15). What is done and what is next: [roadmap.md](roadmap.md),
+steps 2–3 built 2026-10-15; step 4, the request runner, and the latency histograms built
+2026-10-21, for the block layer). What is done and what is next: [roadmap.md](roadmap.md),
 "Now — Phase 1".
 **Based on:** Phase 1 Goals A, B and C in [goals-and-requirements.md](goals-and-requirements.md),
 and the tool decision in [phase1-tool-research.md](phase1-tool-research.md).
@@ -73,12 +74,13 @@ Profile FW's protos keep changing), so most of the set-up happens per run, by it
      ▼
   5 refresh the run's views; run; check (C2) ────────────── OURS
      ▼
-  6 draw it in Grafana, in the run's folder ─────────────── OURS (Grafana API)
-     ▼
   7 explain what the graph shows; check it (C3) ─────────── OURS + OUR LLM
+     ▼
+  6 draw it in Grafana, in the run's folder ─────────────── OURS (Grafana API)
   ─────────────────────────────────────────────────────────────────────────────
   OUR LLM = the company LLM gateway (later: an open-source model in the office).
   WRENAI's only job is step 4. It contains no AI and calls none.
+  Step 7 runs before step 6, so the panel carries the explanation.
 ```
 
 ### 1.3 In one table
@@ -158,21 +160,22 @@ office:
  the run's views (SQL)          the run's WrenAI data models + metrics
 ```
 
-**Now:** written for the two block tables, with the team's answers of 2026-10-12 — how
-to review them is in [knowledge/README.md](../knowledge/README.md).
+**Now:** written for the block layer, with the team's answers of 2026-10-12 to
+2026-10-20 — how to review them is in [knowledge/README.md](../knowledge/README.md).
 
 | File | Columns | State |
 |---|---|---|
 | `_common.yaml` | 9 shared columns | draft |
-| `linux_block_1_stats.yaml` | 18 | 15 draft · 3 confirmed · all 3 questions answered · 10 metrics (IOPS, MiB/s, average latency, average size, busy %, queue depth) |
-| `linux_block_2_misc.yaml` | 180 (18 single + 10 groups) | 180 draft · 16 of 17 questions answered · 8 metrics |
+| `linux_block_1_stats.yaml` | 18 | 15 draft · 3 confirmed · 4 of 4 questions answered · 10 metrics (IOPS, MiB/s, average latency, average size, busy %, queue depth) |
+| `linux_block_2_misc.yaml` | 180 (18 single + 10 groups) | 180 draft · 17 of 17 questions answered · 8 metrics · 4 latency histograms |
+| `latency_buckets.yaml` | 3 | draft · a run-level table: one row per bucket, no `ts` |
 
 The latency histograms' ranges are not in the rows. The profiler writes the thresholds
 to `latency_bucket_options.yaml`, and the loader stores them in the run's
 `latency_buckets` table, one row per bucket, with a label such as `100 µs - 1 ms`
-([ADR-0011](decisions/0011-run-level-config-sidecars.md)). Phase 1 can label the
-histograms once that table is described too ([roadmap.md](roadmap.md), "Next"). Still
-open in `block_2`: Q2 (the team is checking).
+([ADR-0011](decisions/0011-run-level-config-sidecars.md)). In the catalog, each of
+`block_2`'s four latency groups says `labels: latency_buckets`: its 17 columns are
+buckets in position order, which that table labels (section 5.2).
 
 ## 5. Per-interval views — removing the biggest trap (OURS)
 
@@ -190,6 +193,7 @@ writes it from the catalog:
 | always | `interval_s` — seconds since the previous sample |
 | `counts_since: boot` | the first sample's change is "no value" (the total since boot is not activity in this run) |
 | `counts_since: profiler start` | the first sample's change is the value itself (assumed — the eBPF maps start at zero) |
+| `level: run` (a table, not a column) | no view: the table has no `ts` and is read as it is (`latency_buckets`) |
 
 **One set of views per run.** Each run has its own database, so its views are made
 for it — in the run's own database, named `<table>_interval` (decided 2026-10-15).
@@ -242,6 +246,56 @@ column names such as `read_ios`) are not covered: their names are not in the cat
 table's comment), step 0 could also tell exactly which proto version a run used — a
 column can change meaning without changing its name.
 
+### 5.2 Latency histograms — buckets with their ranges
+
+`block_2` counts each completed read and write by its latency in four histograms
+(device and driver layer, read and write), each 17 positional bucket columns. Which
+range a bucket covers is chosen per run (`-lat-buckets`), so the columns alone cannot be
+read: the ranges are the rows of the run's `latency_buckets` table. For a table whose
+catalog groups say `labels: latency_buckets`, our generator makes a second view over its
+per-interval view, `<table>_histograms` (built 2026-10-21): one row per sample,
+histogram and bucket.
+
+| Column | What it holds |
+|---|---|
+| `run_id`, `hostname`, `ts`, `interval_s` | as in the per-interval view |
+| `histogram` | `read device latency`, `read driver latency`, `write device latency` or `write driver latency` — the catalog group's name |
+| `bucket_index` | the bucket's position, 0 the fastest; charts order by it |
+| `bucket` | the range, ready for a legend: `< 1 µs`, `1-10 µs`, `100 µs - 1 ms`, `> 1 s` |
+| `threshold_us` | the threshold that opens the bucket; 0 for both open ends |
+| `io_count_delta` | I/Os counted in the bucket since the previous sample |
+
+Buckets are matched by position (ADR-0011). Take the real run's 15 thresholds, from
+1 µs to 1 s: `latency_buckets` has 16 rows, `< 1 µs`, `1-10 µs`, …, `500 ms - 1 s` and
+`> 1 s`. Column 0 (`…_lh_opt1`) is `< 1 µs`, column 1 (`…_bw_opt1_and_opt2`) is
+`1-10 µs`, and so on up to column 14, `500 ms - 1 s`. The overflow column
+(`…_latency_overflow`) is `> 1 s`: every I/O above the last threshold. That leaves
+column 15 (`…_bw_opt15_and_opt16`), the range between a 15th and a 16th threshold that
+was never set: it is unused and stays 0 (catalog Q16), so the view leaves it out.
+`python -m analysis prepare` checks that no I/O is lost this way: per histogram, the
+I/Os in the view must equal the I/Os in all 17 columns, or it prints a warning that
+names the unused columns. A simulated run always warns, because `tests/make_fixture.py`
+fills every column.
+
+What our LLM is given:
+
+- **The histogram view is a data model of its own**, `<table>_histograms`. Its
+  description lists the run's own buckets (`0: < 1 µs, 1: 1-10 µs, …`), so "reads
+  slower than 1 ms" can become `bucket_index >= k`.
+- **The 68 bucket columns are not in the `block_2` data model**: unlabelled, they are
+  counts of unknown ranges. They stay in the per-interval view, which the histogram
+  view reads.
+- **A run profiled without `-lat-buckets`** has no `latency_buckets` table, so it gets
+  no histogram model, and the `block_2` model says why.
+- **`latency_buckets` is a data model too**, with no time column, for "which latency
+  buckets did this run use?".
+
+A distribution, such as "show the read latency distribution", is then one plain query:
+filter to one histogram, sum `io_count_delta` grouped by `bucket_index` and `bucket`,
+order by `bucket_index`. Grafana draws it as a bar chart with the ranges along the
+bottom. All of this ran on the simulated run, on ClickHouse 25.6 and Grafana 13.2.4
+(2026-10-21): a distribution, slow reads over time, and one line per bucket over time.
+
 ## 6. What WrenAI does for us — and what it does not
 
 **How we use it:** as a Python library on the office box. Our code calls one function,
@@ -251,10 +305,14 @@ connection and no network.
 **What it does (step 4 only):**
 
 - **Reads the data models we generate for the requested run:** one per view in the
-  run's database, listing only the columns that run has, each with its catalog meaning
-  and unit; the catalog's metrics (`read_iops`, `avg_read_latency_ms`, …) as calculated
-  fields; and later, joins between tables. The data model names are the same in every
-  run (`linux_block_1_stats`), so the LLM's prompts and examples never change.
+  run's database — the per-interval views and the histogram views (section 5.2) — and
+  one per run-level table, read as it is (`latency_buckets`). Each lists only the
+  columns that run has, each with its catalog meaning and unit; the catalog's metrics
+  (`read_iops`, `avg_read_latency_ms`, …) are calculated fields; joins between tables
+  come later. The data model names are the same in every run (`linux_block_1_stats`,
+  `linux_block_2_misc_histograms`), so the LLM's prompts and examples never change.
+  `views.model_specs` is the one list they come from: the WrenAI files, the prompts and
+  the names a query may use are all made from it.
 - **Plans the query.** Our LLM writes a query on the data models, for example
   `SELECT ts, read_iops, write_iops FROM linux_block_1_stats WHERE run_id = '…'`.
   `dry_plan` expands it into real ClickHouse SQL over the views, **without running
@@ -270,7 +328,8 @@ connection and no network.
   database in front, when the name matches a data model. `SELECT read_io_count FROM
   run_db.linux_block_1_stats` was planned into SQL that reads the **raw table** — the
   running totals the views exist to hide. So C1 does not trust WrenAI: it reads every
-  table in WrenAI's final SQL and refuses anything but the run's own views (section 9).
+  table in WrenAI's final SQL and refuses anything the run's data models do not read
+  (section 9).
   The LLM's query must also name data models alone, without a database.
 - **It rewrites some ClickHouse functions** on the way through: `toStartOfMinute(ts)`
   came out as `dateTrunc('MINUTE', ts)`. Equivalent: on ClickHouse 25.6 both gave the
@@ -299,9 +358,9 @@ as more tables are added, it handles the joins between them.
 - **The compiled planner contains no HTTP client at all** — none among its 277 bundled
   libraries.
 
-**Still to confirm on the office box**, with the version actually installed: run one
-`dry_plan` under `strace -f -e trace=connect` — it should open no network connection
-of any kind.
+**Confirmed on the office box (2026-10-20)**, with the version installed there: a
+`dry_plan` run under `strace -f -e trace=connect` (`python -m analysis plan-file`)
+opened no network connection.
 
 **Tried and dropped (2026-10-15): defining a data model by SQL (`ref_sql`)** instead of
 a view, which would have created nothing in ClickHouse. WrenAI planned it, but rewrote
@@ -339,9 +398,9 @@ request.yaml
     ▼
 5 RUN + CHECK C2 .... OURS ──► refresh the run's views, run, check the result
     ▼
-6 DRAW .............. OURS ──► Grafana folder <run> → dashboard → panel → link
-    ▼
 7 EXPLAIN + CHECK C3  OURS + OUR LLM ──► printed, and stored on the panel
+    ▼
+6 DRAW .............. OURS ──► Grafana folder <run> → dashboard → panel → link
     ▼
 record saved: out/<run>/<time>-<request>.json      OURS
 ```
@@ -351,6 +410,7 @@ record saved: out/<run>/<time>-<request>.json      OURS
 ```yaml
 run: ProfileData-fio-20261008-101500
 request: Show read and write IOPS over time at the block layer.
+# db: <database>     optional: the run's database, when it should not be searched for
 ```
 
 The request names only the run. Step 0 finds the database that holds it by asking
@@ -375,32 +435,71 @@ get a clear "this data is not described yet", or "not collected", and the rest o
 request is still answered (A11). During the trial only the two block tables are
 described, so three of the five example requests will show this behaviour.
 
+### 7.1 As built (2026-10-21)
+
+`python -m analysis ask <request.yaml>` runs every step (`analysis/runner.py`).
+`--run` and `--db` replace the file's run and database, so one request file serves any
+run. Add `--yes` to take the meaning as confirmed without asking (for scoring a test
+set), and `--no-grafana` to stop after the explanation. The LLM and Grafana settings come from
+`tools/config.json` (`--settings` names another file); the ClickHouse host and port
+from `config/config.yaml`.
+
+| Step | What our LLM is sent | What comes back, and how code checks it |
+|---|---|---|
+| 1 | The request; the run's first and last sample; every data model of the run, with its metrics and columns (columns that share a description, such as a group of buckets, on one line); what the run has that is not described | JSON: the measures (data model + exact name), the time, the chart, the assumptions, the parts not available. Every measure must be a metric or column of this run's data models. The time must be one of: the whole run, the last or first *N* seconds, or from *A* to *B* seconds after the start — code turns it into two times inside the run (A3). An answer that cannot be used is sent back once, with the reason |
+| 3 | The meaning; the time range, with the two times to filter on; only the data models it uses; the query rules | JSON: one query, a chart, a unit per column. A query refused by C1, WrenAI or C2 goes back with the reason, at most twice; then the request stops with the last reason |
+| 7 | The request, the meaning, the query, the catalog's formulas for the measures, and a summary of the result that code writes (rows; per number its minimum, maximum and mean; a text column's values) | JSON: 2 to 4 sentences. C3 checks them; after two failures, code writes the explanation from the summary, so it always says only what the result shows |
+
+Data models with no `ts` (a run-level table) take no time range: a time in the request
+is set aside for them. Each LLM call is one request with JSON out (design rule 8).
+
+**The record**, `out/<run>/<time>-<request>.json`, keeps the request (and any
+rephrasing), the run's database and data models, each step-1 answer and the meaning
+used, the time range, every query with its C1 and C2 results and WrenAI's SQL, the
+result summary, every explanation with its C3 result, the panel and the link, and for
+each LLM call its step, duration and token use. It never holds the LLM's request
+headers.
+
 ## 8. Grafana output (OURS)
 
 - **One folder per run**, created when first needed. **One dashboard per request**,
-  titled with the request.
-- **The dashboard's time range is set to the data's time range.** Runs are loaded after
-  they finish, so Grafana's default "last 6 hours" would show an empty graph.
+  titled with the request. Asking the same request about the same run again replaces
+  its dashboard: the dashboard's id is made from the two.
+- **The dashboard's time range is set to the data's time range** — the result's own
+  first and last time when it has a time column (one table can end before the run
+  does), else the range asked for. Runs are loaded after they finish, so Grafana's
+  default "last 6 hours" would show an empty graph. The dashboard shows UTC.
 - **The panel's query is the exact checked SQL**, visible under Edit (C4). The
   explanation goes into the panel description (the ⓘ icon) and is printed in the
-  terminal.
-- **The panel type comes from a template**, chosen by the shape of the result:
+  terminal, with any notes from C2.
+- **The panel type comes from a template**, chosen by the shape of the result. Our LLM
+  proposes a chart; when the result's shape does not suit it, the template that does is
+  used, and the description says so.
 
 | Result | Panel |
 |---|---|
 | a time column and numbers | time series |
+| a time column, a text column and numbers (e.g. one row per second and bucket) | time series, one line per text value (Grafana's "prepare time series" transformation) |
 | one number | stat |
-| categories and numbers | bar chart |
+| categories and numbers | bar chart, the categories along the bottom |
 | size or latency buckets | bar chart |
 | anything else | table |
+
+**Settings** (`tools/config.json`, `grafana`): `url`, and `token` — a service-account
+token with the Editor role — or `user` and `password`; `datasource` picks a ClickHouse
+data source by name or id, else the first is used. The token is never printed.
+`python tools/check_phase1_env.py --grafana-write-test` checks it on the office box.
 
 ## 9. The checks (OURS)
 
 | Check | When | What it guarantees |
 |---|---|---|
-| **C1** | after WrenAI's plan, before running | Read-only. Reads only the requested run's per-interval views (`<table>_interval`), never the raw tables, and no other database — checked table by table on WrenAI's final SQL, because strict mode alone let a raw table through (section 6). No table functions (`url`, `s3`, `remote`, `file` …), so a query cannot read from, or send to, anywhere else. The LLM's query used `table.column` and no `WITH` blocks (section 6). Filters to the requested run. Time-bounded. |
-| **C2** | after running | An empty result is explained (wrong run, no activity, data not collected), not drawn as a blank graph. No negative rates. Gaps are mentioned. |
-| **C3** | on the explanation | Every number in the explanation appears in the result. Only the queried measurements are mentioned. |
+| **C1** | after WrenAI's plan, before running | Read-only. Reads only what the requested run's data models read — its views (`<table>_interval`, `<table>_histograms`) and its run-level tables — never a raw sampled table, and no other database: checked table by table on WrenAI's final SQL, because strict mode alone let a raw table through (section 6). No table functions (`url`, `s3`, `remote`, `file` …), so a query cannot read from, or send to, anywhere else. The LLM's query used `table.column` and no `WITH` blocks (section 6). Filters to the requested run. For a time range, filters `ts` with exactly the two times, written `toDateTime('…', 'UTC')`. |
+| **C2** | after running | An empty result stops the request with why — the samples in that range are counted — and is never drawn as a blank graph. A number column with no value at all, or a negative value (a rate, count, size or time cannot be negative), sends the query back. Gaps are said in the description. |
+| **C3** | on the explanation | Every number in it is in the result (within 1 %, for rounding) or in what the graph is made from: the run, its times, the request, the query, the catalog's formulas, the result's labels. Every metric or column it names is one the query uses; a name that is also a plain word (`device`, `range`) is not checked. |
+
+All three are in `analysis/checks.py`; a refusal is sent back to our LLM with its
+reason, so the next try can correct it.
 
 ## 10. Test set and scoring (OURS)
 
@@ -420,26 +519,31 @@ described, so three of the five example requests will show this behaviour.
 
 ```
 analysis/            OURS — Phase 1 code: python -m analysis ...
-  __main__.py        command line (exists: check-run, prepare, plan, plan-file; the
-                     request file comes with step 4)
-  catalog.py         read knowledge/catalog                           (exists)
+  __main__.py        command line: ask, check-run, prepare, plan, plan-file   (exists)
+  runner.py          one request, steps 0-7, and its record                   (exists)
+  catalog.py         read knowledge/catalog                                   (exists)
   runs.py            step 0: find a run's database; compare its columns with the catalog
-                                                                      (exists)
-  clickhouse.py      ClickHouse access: read-only, except CREATE VIEW (exists)
-  views.py           generate the per-interval view SQL for a run     (exists)
-  wren_project.py    generate the WrenAI data models for a run; dry_plan   (exists)
-  llm.py             the only place that calls our LLM (as tools/llm_config.py)
-  steps.py           understand · write query · explain
-  checks.py          C1 · C2 · C3                       (exists: C1 on the SQL)
-  grafana.py         folder · dashboard · panel templates
+                                                                              (exists)
+  clickhouse.py      ClickHouse access: read-only, except CREATE VIEW         (exists)
+  views.py           the per-interval and histogram view SQL for a run, and the run's
+                     data models (model_specs)                                (exists)
+  wren_project.py    the WrenAI data models for a run; dry_plan               (exists)
+  llm.py             the only place that calls our LLM (with tools/llm_config.py)
+                                                                              (exists)
+  steps.py           understand · write query · explain: prompts, and checked answers
+                                                                              (exists)
+  checks.py          C1 · C2 · C3                                             (exists)
+  grafana.py         folder · dashboard · panel templates                     (exists)
 knowledge/           OURS — reviewed by engineers
-  catalog/           what every column means                          (exists)
-  rules.md           rules sent to our LLM                            (later)
-  examples.yaml      confirmed request → query pairs (B5)             (later)
-requests/            example request files
-tests/test_analysis.py   tests of analysis/, on simulated runs - no ClickHouse  (exists)
+  catalog/           what every column means                                  (exists)
+  rules.md           rules sent to our LLM            (later; today in steps.py)
+  examples.yaml      confirmed request → query pairs (B5)                     (later)
+requests/            example request files                                    (exists)
+tests/test_analysis.py   step 0, views, data models, C1, prepare - no ClickHouse  (exists)
+tests/test_runner.py     the request runner, with a scripted LLM - no ClickHouse,
+                         LLM or Grafana                                       (exists)
 tests/phase1/        trial test set and scoring
-tools/               readiness check, LLM check, catalog check        (exist)
+tools/               readiness check, LLM check, catalog check                (exist)
 out/                 one record per request, with the WrenAI data models generated
                      for it (git-ignored; generated files are never edited by hand)
 ```
@@ -462,9 +566,11 @@ code that talks to the LLM.
    the office box.~~ **Done:** a direct-I/O random-mix FIO run with latency buckets,
    loaded on 15 Oct; steps 2–3 ran on it on 2026-10-20. The data stays there; building
    and testing here needs only the output of the commands run there.
-4. **Answer the catalog questions.** `block_1`: all answered. `block_2`: 16 of 17
-   answered; Q2 is being checked by the team.
+4. ~~**Answer the catalog questions.**~~ **Done (2026-10-20):** every question of both
+   block tables is answered.
 5. **Export the existing Grafana dashboards as JSON** — the answer key (section 10).
+6. **A Grafana service-account token** (Editor role) in `tools/config.json`, as
+   `grafana.token`, for step 6.
 
 ## 13. Build order
 
@@ -473,8 +579,8 @@ code that talks to the LLM.
 | 0 | team | The prerequisites above | — |
 | 1 | team | Catalog reviewed | `python tools/catalog.py check` passes; no `todo` left in the columns the trial uses |
 | 2 | AI (OURS) | Step 0, and the per-interval views generated for a run | On a real run, the sum of the changes equals last minus first; an older run's missing columns are reported. *Built 2026-10-15; passed with a simulated run on a real ClickHouse 2026-10-16, and on a real run on the office box 2026-10-20* |
-| 3 | AI (OURS) | WrenAI data models generated for a run; WrenAI plans a query; C1 on its SQL | A hand-written query on the data models plans and runs; `strace` shows WrenAI opens no network connection. *Built 2026-10-15; with a simulated run on a real ClickHouse a query planned and ran, and matched the raw table (2026-10-16); queries planned and ran on a real run on the office box (2026-10-20); `ref_sql` tried and dropped (section 6); `strace` on the office box pending* |
-| 4 | AI (OURS) | The request runner, steps 1–7 | One request end to end, from request file to Grafana panel |
+| 3 | AI (OURS) | WrenAI data models generated for a run; WrenAI plans a query; C1 on its SQL | A hand-written query on the data models plans and runs; `strace` shows WrenAI opens no network connection. *Built 2026-10-15; with a simulated run on a real ClickHouse a query planned and ran, and matched the raw table (2026-10-16); queries planned and ran on a real run on the office box, and `strace` showed no network connection (2026-10-20); `ref_sql` tried and dropped (section 6)* |
+| 4 | AI (OURS) | The request runner, steps 1–7 | One request end to end, from request file to Grafana panel. *Built 2026-10-21 for the block layer, with the latency histograms (section 5.2). Run end to end on a simulated run, on ClickHouse 25.6 and Grafana 13.2.4, with a scripted stand-in for our LLM: time series, a stat for the last 2 minutes, a latency distribution, a C1 refusal sent back and corrected. Not yet run with our LLM, which only the office box reaches* |
 | 5 | team + AI | 10 trial requests with answers, and scoring | A score report |
 | 6 | together | Decision: keep WrenAI, switch to Cube Core, or do step 4 ourselves | — |
 
@@ -499,10 +605,27 @@ strace -f -e trace=connect python -m analysis plan-file out/<run>/data_models.js
 
 Then compare `--execute`'s numbers with the existing Grafana panel for the same run.
 
+### Checking step 4 on the office box
+
+With `grafana.token` set in `tools/config.json` (section 8), use the files in
+`requests/` — the five example requests of the requirements, and a latency
+distribution — with `--run` naming the run:
+
+```
+python tools/check_phase1_env.py --grafana-write-test   # the token can make dashboards
+python -m analysis prepare <run>                        # now also the histogram view
+python -m analysis ask requests/io-counts.yaml --run <run>   # shows the meaning; answer y
+```
+
+`ask` prints the meaning, the checked SQL, the explanation and the Grafana link, and
+saves the record in `out/<run>/`. The record shows what our LLM answered at each step:
+it is the first look at how our LLM reads these prompts.
+
 ## 14. Open design questions
 
 1. **Views or tables:** start with views; switch to tables filled at load time only if
    views are too slow on long runs.
-2. **Settings:** the runner needs the same LLM, ClickHouse and Grafana settings as
-   `tools/config.json`. Reuse that file, or move it to `config/` when the package is
-   built?
+2. ~~**Settings:**~~ **Built this way (2026-10-21), for review:** `ask` reads the LLM and
+   Grafana settings from `tools/config.json`, the file the readiness checks already use
+   (git-ignored), and the ClickHouse host and port from `config/config.yaml`, like the
+   other `analysis` commands. Moving them to `config/` can come with the package.

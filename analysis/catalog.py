@@ -44,6 +44,16 @@ class Metric:
     status: str
 
 
+@dataclass(frozen=True)
+class Histogram:
+    """A catalog group of positional bucket columns - say, the 17 read device latency
+    buckets - whose ranges another table labels: the bucket at position p is that
+    table's option_index p, and the last column is the overflow bucket (ADR-0011)."""
+    name: str                      # "read device latency"
+    columns: tuple[str, ...]       # in position order; the last is the overflow
+    labels: str                    # the run-level table with the ranges, e.g. latency_buckets
+
+
 @dataclass
 class Table:
     name: str
@@ -51,6 +61,8 @@ class Table:
     observes: str
     columns: dict[str, Column]     # this table's own columns, in catalog order
     metrics: list[Metric] = field(default_factory=list)
+    level: str = "sample"          # "sample": one row per sample; "run": rows for the run, no ts
+    histograms: list[Histogram] = field(default_factory=list)
 
 
 @dataclass
@@ -96,5 +108,16 @@ def load(directory: Path = CATALOG_DIR) -> Catalog:
                 observes=" ".join(str(doc.get("observes", "")).split()),
                 columns={n: _column(n, e) for n, e in described(tdoc)},
                 # a file's metrics belong to its main table (child tables come later)
-                metrics=metrics if name == doc.get("table") else [])
+                metrics=metrics if name == doc.get("table") else [],
+                level=str(doc.get("level") or "sample"),
+                histograms=[Histogram(name=_histogram_name(g["group"]),
+                                      columns=tuple(g.get("columns") or ()),
+                                      labels=str(g["labels"]))
+                            for g in tdoc.get("groups") or [] if g.get("labels")])
     return Catalog(shared=shared, tables=tables)
+
+
+def _histogram_name(group: str) -> str:
+    """'Read device latency buckets' -> 'read device latency'."""
+    name = " ".join(str(group).split()).lower()
+    return name[:-len(" buckets")] if name.endswith(" buckets") else name

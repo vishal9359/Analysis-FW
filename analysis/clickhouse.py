@@ -23,8 +23,9 @@ class ClickHouse:
     def __init__(self, host: str, port: int) -> None:
         import clickhouse_connect
         self._connect = lambda **kw: clickhouse_connect.get_client(host=host, port=port, **kw)
-        # every read runs with readonly=2: no writes, no DDL, settings may still be set
-        self._read = self._connect(settings={"readonly": 2})
+        # every read runs with readonly=2: no writes, no DDL, settings may still be set.
+        # session_timezone=UTC: times come back as UTC whatever the server's own zone is
+        self._read = self._connect(settings={"readonly": 2, "session_timezone": "UTC"})
         self._write = None
 
     @classmethod
@@ -34,6 +35,18 @@ class ClickHouse:
 
     def rows(self, sql: str, parameters: dict | None = None) -> list[tuple]:
         return self._read.query(sql, parameters=parameters or {}).result_rows
+
+    def query(self, sql: str) -> tuple[list[str], list[str], list[tuple]]:
+        """(column names, ClickHouse types, rows) - read-only, like rows()."""
+        r = self._read.query(sql)
+        return list(r.column_names), [t.name for t in r.column_types], r.result_rows
+
+    def time_span(self, database: str, table: str, run: str):
+        """(first ts, last ts) of the run in this table, in UTC, or None if it has no rows."""
+        rows = self.rows(
+            f"SELECT min(ts), max(ts), count() FROM {quote(database)}.{quote(table)} "
+            "WHERE run_id = {run:String}", {"run": run})
+        return (rows[0][0], rows[0][1]) if rows and rows[0][2] else None
 
     def execute(self, sql: str) -> None:
         """For CREATE VIEW only - the one write the analysis makes."""

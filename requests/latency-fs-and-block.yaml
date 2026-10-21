@@ -1,0 +1,8 @@
+# Example request 3 of the requirements (docs/goals-and-requirements.md). Only the
+# block layer is described so far, so the filesystem part must be reported as "not
+# described yet" while the block latency is still drawn (A11).
+# From the repo root, naming your run - the run folder's name or its path:
+#   python -m analysis ask requests/latency-fs-and-block.yaml --run <run folder>
+# (without --run, the run below is used: the simulated run of docs/development.md).
+run: ProfileData-fixture-20260727-180221
+request: Show latency for filesystem and block layers, but not SSD.

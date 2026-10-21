@@ -24,10 +24,13 @@ knowledge/                    ← what every column means (Measurement Catalog),
                                 by engineers; README.md says how; checked by
                                 `python tools/catalog.py check`
 src/                          ← Module 1, the loader: python -m src <run>
-analysis/                     ← Phase 1 code: python -m analysis ... (steps 0, views,
-                                WrenAI data models, check C1 so far)
+analysis/                     ← Phase 1 code: python -m analysis ask <request.yaml> (the
+                                whole request: runner.py, llm.py, steps.py, grafana.py,
+                                checks.py) + check-run | prepare | plan | plan-file
+requests/                     ← example request files (the five of the requirements, +1)
 tools/                        ← office-box checks (check_phase1_env.py, check_llm.py) +
-                                catalog.py; config.json = credentials, git-ignored
+                                catalog.py; config.json = LLM + Grafana credentials,
+                                git-ignored
 docs/
 ├── development.md            ← developer guide: architecture, input contract,
 │                             derived schema, fixture generator, tests, Phase 1 commands
@@ -98,26 +101,32 @@ where it and an ADR disagree, the ADR wins.
 ## Status (keep this current)
 
 The full board — done, next, waiting, known issues — is [docs/roadmap.md](docs/roadmap.md),
-"Now — Phase 1". In short (2026-10-20):
+"Now — Phase 1". In short (2026-10-21):
 
 - **Branch:** Phase 1 work is on **`phase1`**, rebased onto `main` on 2026-10-20 (it has
-  `main`'s `latency_buckets` loader); not yet merged. All 67 tests pass (46 loader,
-  21 Phase 1); `python tools/catalog.py check` passes.
+  `main`'s `latency_buckets` loader); not yet merged. All 93 tests pass (46 loader,
+  47 Phase 1); `python tools/catalog.py check` passes.
 - **Done:** Module 1 loader, including run-level sidecars (`latency_buckets`,
   ADR-0011). Phase 1 requirements, tool choice (WrenAI trial, Grafana draws), office-box
   readiness check, design ([docs/phase1-design.md](docs/phase1-design.md)), Measurement
-  Catalog for `linux_block_1_stats` and `linux_block_2_misc` with the team's answers.
-  Decided: each run is loaded into a database of its own, and its views live there.
-- **Built and run on one real run:** `analysis/` — step 0, per-run views, per-run WrenAI
-  data models, check C1 (design build order §13, steps 2–3). Worked on a simulated run
-  on a real ClickHouse 25.6 in WSL2 (2026-10-16), then on a real run on the office box
-  (2026-10-20). That run corrected the catalog: the latency thresholds are rows of
-  `latency_buckets`, not columns of `block_2`; `device` holds `nvme1n1`.
-- **Next:** check that run's numbers (views against the raw table, counter relations,
-  FIO totals) and `strace`; describe `latency_buckets` so histograms can be labelled;
-  then build step 4, the request runner (our LLM, Grafana writer, checks C2 and C3).
-- **Waiting on the team:** catalog Q2 (block_2 sizes before or after splitting); the
-  existing Grafana dashboards exported as JSON (the answer key).
+  Catalog for `linux_block_1_stats`, `linux_block_2_misc` and `latency_buckets`, every
+  question answered. Decided: each run is loaded into a database of its own, and its
+  views live there.
+- **Steps 0–3 run on one real run** (office box, 2026-10-20): step 0, per-run views,
+  WrenAI data models, check C1. That run corrected the catalog: the latency thresholds
+  are rows of `latency_buckets`, not columns of `block_2`; `device` holds `nvme1n1`.
+- **Built 2026-10-21, run on a simulated run only:** the whole request for the block
+  layer — `python -m analysis ask` (our LLM's steps 1, 3, 7; checks C2, C3; the Grafana
+  writer; a record per request) and labelled latency histograms (a
+  `<table>_histograms` view per run). Run end to end on ClickHouse 25.6 and Grafana
+  13.2.4 in WSL2 with a stand-in for our LLM; never yet with our LLM.
+- **Next:** on the office box, `ask` with our LLM on the real run (the files in
+  `requests/`), then the user's review of the block layer; then the trial test set.
+  The real run also has filesystem, platform and `block_3` tables, not catalogued yet.
+- **Decided 2026-10-20:** build all of Phase 1 for the block layer first; the user
+  reviews it before other layers are added.
+- **Waiting on the team:** the existing Grafana dashboards exported as JSON (the answer
+  key); a Grafana service-account token in `tools/config.json`.
 - **Deferred debt** (all tracked in ADRs): append-only reload, single-node
   `run_id`/`record_id`, schema auto-migrate.
 
@@ -127,9 +136,11 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
   `src/`; there is deliberately no `pyproject.toml` — see
   [ADR-0004](docs/decisions/0004-src-layout-and-external-config.md)). Batch: point at a
   parent of `ProfileData-*` runs; `--batch`, `--continue-on-error`.
-- **Phase 1:** `python -m analysis check-run | prepare | plan | plan-file` from the repo
-  root (docs/development.md, "Phase 1"). Phase 1 code goes in `analysis/`; `src/` stays
-  the loader.
+- **Phase 1:** `python -m analysis ask <request.yaml>`, and `check-run | prepare | plan |
+  plan-file`, from the repo root (docs/development.md, "Phase 1"). Phase 1 code goes in
+  `analysis/`; `src/` stays the loader. `views.model_specs` is the one list of a run's
+  data models: the WrenAI files, the prompts and the allowed names come from it. Only
+  `analysis/llm.py` calls our LLM.
 - **Config:** `config/config.yaml` (repo root, editable). Override with `--config PATH`
   or `CH_HOST`/`CH_PORT` env. `analysis/` reads only the host and port from it: it finds
   a run's database by the run's name (the folder's name; a path works too), or `--db`.
@@ -138,9 +149,10 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
   `tests/sample_protos/*.proto` or `tests/make_fixture.py` changes; generate one by hand
   with `python tests/make_fixture.py <dir>`. Adding a `.proto` there needs **no test
   edit** — the unit set and record total are derived from the protos on disk.
-  `tests/test_analysis.py` tests Phase 1 on a fake database; its WrenAI tests are
-  skipped if `wrenai` is not installed. A sample proto that does not compile makes
-  **every** test error — `python tools/catalog.py check` names it.
+  `tests/test_analysis.py` tests Phase 1 on a fake database, `tests/test_runner.py` the
+  request runner with a scripted LLM and a fake Grafana; their WrenAI tests are skipped
+  if `wrenai` is not installed. A sample proto that does not compile makes **every**
+  test error — `python tools/catalog.py check` names it.
 - **When a proto changes:** run `python tools/catalog.py check`, update the matching
   `knowledge/catalog/*.yaml` (new columns, `schema_fingerprint`), and ask the team about
   anything unclear by adding a question to that file.
@@ -167,9 +179,11 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
 - **Never trust WrenAI's SQL alone:** check C1 (`analysis/checks.py`) reads every table
   in it — strict mode once let a raw table through (design §6).
 - **Secrets stay out of git and output.** `tools/config.json` holds the LLM credentials
-  (custom headers such as `x-dep-ticket`, `User-Id`): git-ignored — never commit it,
-  and never print, log or save header values (names only). Keep internal hostnames
-  (the LLM gateway URL, model path) out of committed files: the repo is on GitHub.
+  (custom headers such as `x-dep-ticket`, `User-Id`) and the Grafana token:
+  git-ignored — never commit it, and never print, log or save header values or the
+  token (names only); a request's record keeps no headers. Keep internal hostnames (the
+  LLM gateway URL, model path) out of committed files, and Grafana dashboard exports
+  too: the repo is on GitHub.
 - **Plain English** in docs and questions, readable by a new engineer; no extra files
   (other AI tools such as Codex read this repo too).
 - **Ingest is append-only** (re-loading a run duplicates rows) — see
@@ -189,8 +203,10 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
 
 - **Dev machines:** Windows. The first one has **no ClickHouse** — DB behaviour was
   validated with the in-memory store and a fake database. The next one runs ClickHouse
-  in WSL2 (docs/development.md, "Phase 1"). Shell commands run in Git Bash: a multi-line
-  `python -c` or a heredoc with an apostrophe fails — use a script file; add `-X utf8`
+  in WSL2 (docs/development.md, "Phase 1"), and may run a local Grafana for trying
+  panels. Our LLM is not reachable from a dev machine: `ask` is tried there with a
+  stand-in. Shell commands run in Git Bash: a multi-line `python -c` or a heredoc with
+  an apostrophe fails — use a script file, or the edit tools for code; add `-X utf8`
   when Python prints non-ASCII text.
 - **Office test box:** Linux (IST timezone), Python 3.12, **ClickHouse 25.6 in Docker
   at `localhost:8123`, no password**; Grafana (container, ClickHouse plugin); WrenAI

@@ -1,0 +1,8 @@
+# Example request 4 of the requirements (docs/goals-and-requirements.md). The NVMe
+# tables are not described yet, so that part must be reported as "not described yet"
+# while the block-layer IOPS are still drawn (A11).
+# From the repo root, naming your run - the run folder's name or its path:
+#   python -m analysis ask requests/iops-block-vs-nvme.yaml --run <run folder>
+# (without --run, the run below is used: the simulated run of docs/development.md).
+run: ProfileData-fixture-20260727-180221
+request: Compare read and write IOPS between the block and NVMe layers.

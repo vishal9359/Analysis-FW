@@ -29,8 +29,8 @@ sampling: 'Every -i seconds (default 1 s). The eBPF counters keep growing; each 
 device_filter: In the kernel, by disk name (config_map) - only the device given with -dev.
 observes: Bios as they enter the block layer, before merging, plus bio splits and merges, the
   REQ_* flags bios carry, and the time I/Os spend in the driver and on the device. Bios are counted
-  once, when submitted (Q9), so a bio that is later merged or fails is still counted. Whether sizes
-  are counted before or after splitting is open (Q2).
+  once, when submitted (Q9), so a bio that is later merged or fails is still counted. Sizes and
+  bytes are counted then too, before any split (Q2).
 status: draft
 questions:
 - id: Q1
@@ -41,8 +41,8 @@ questions:
 - id: Q2
   question: Are bios counted by size once, when submitted (before splitting), or are the pieces
     counted after splitting? The same question applies to cumulative_*_io_size_bytes.
-  answer: TODO
-  note: The team is checking (2026-10-15).
+  answer: 'Counted at submission time, before any split - the size buckets and also
+    cumulative_read_io_size_bytes and cumulative_write_io_size_bytes. (Team, 2026-10-20)'
 - id: Q3
   question: Is read_unaligned equal to the sum of the twelve read_*_range columns? If so, the
     check 'exact sizes + unaligned = total' must add read_unaligned or the ranges, never both.
@@ -131,6 +131,9 @@ questions:
     remove later. (Team, 2026-10-15) So, without counting any bio twice: read_bios = read_4kb +
     ... + read_8mb + read_gt_8mb + read_unaligned. (Derived from the answers - to be confirmed on
     the first real run.)'
+  note: First real run (2026-10-20) - every bio 4 KiB - the sum equals read_bios and write_bios
+    exactly. Sizes under 4 KiB and unaligned sizes were not in that run, so they are still to
+    be seen.
 - id: Q16
   question: 'With fewer than 16 thresholds - for example -lat-buckets 1,10,100,1000, which gives
     5 ranges: below 1, 1-10, 10-100, 100-1000 and above 1000 microseconds - where are requests above
@@ -141,7 +144,8 @@ questions:
     (Team, 2026-10-15) So the buckets past the last threshold given (here latency_bw_opt4_and_opt5
     and later) stay 0 - our reading.'
   note: latency_buckets holds only the thresholds given - n thresholds give n+1 rows (ADR-0011) -
-    so an unused threshold is simply not there.
+    so an unused threshold is simply not there. First real run (2026-10-20) - 15 thresholds,
+    16 rows in latency_buckets - bw_opt15_and_opt16 stayed 0, as expected.
 - id: Q17
   question: 'An average time per I/O needs a count to divide read_device_time_ns (or
     read_block_driver_time_ns) by. Which is right: the completed requests - the sum of the read
@@ -150,6 +154,11 @@ questions:
     An I/O here is a bio (total_read_ios = read_bios, Q1), so the average time per I/O in an
     interval is the change in read_device_time_ns divided by the change in total_read_ios - our
     reading of the answer.'
+  note: 'First real run (2026-10-20): the device and the driver latency buckets add up exactly to
+    total_read_ios and total_write_ios, the bio counts - not to block_1''s request counts, which
+    differ from them by 36 in each direction (block_1 Q4). So the buckets count bios, and dividing
+    by total_*_ios matches them. That run had no splits; a run with split bios
+    (FIO bs=4M) would settle it.'
 tables:
 - table: linux_block_2_misc
   columns:
@@ -204,7 +213,7 @@ tables:
     kind: counter
     status: draft
     basis: team answers to Q3, Q7 and Q15
-    note: Counted before or after splitting? See Q2.
+    note: Counted when the bio is submitted, before any split (Q2).
   - column: write_unaligned
     type: UInt64
     meaning: Write bios smaller than 8 MiB whose size is not exactly one of the aligned sizes -
@@ -214,7 +223,7 @@ tables:
     kind: counter
     status: draft
     basis: team answers to Q3, Q7 and Q15
-    note: Counted before or after splitting? See Q2.
+    note: Counted when the bio is submitted, before any split (Q2).
   - column: read_bios
     type: UInt64
     meaning: Read bios submitted to the block layer. total_read_ios holds the same count (Q1).
@@ -250,7 +259,7 @@ tables:
     kind: counter
     status: draft
     basis: field name
-    note: Counted before or after splitting? See Q2.
+    note: Counted when the bio is submitted, before any split (Q2).
   - column: cumulative_write_io_size_bytes
     type: UInt64
     meaning: Total bytes of the write bios submitted.
@@ -258,7 +267,7 @@ tables:
     kind: counter
     status: draft
     basis: field name
-    note: Counted before or after splitting? See Q2.
+    note: Counted when the bio is submitted, before any split (Q2).
   - column: read_device_time_ns
     type: UInt64
     meaning: Time read I/Os spent in the device only - not in the block layer or the driver - added
@@ -311,7 +320,7 @@ tables:
     basis: team answers to Q4 to Q7 and Q15
     note: 'For one size distribution that counts no bio twice, use read_lt_4kb, read_4kb to
       read_8mb, read_gt_8mb, and the ranges from read_4kto8k_range up - leave out
-      read_lt_4kb_range. Counted before or after splitting? See Q2.'
+      read_lt_4kb_range. Counted when the bio is submitted, before any split (Q2).'
   - group: 'Read size ranges: unaligned sizes'
     columns: [read_lt_4kb_range, read_4kto8k_range, read_8kto16k_range, read_16kto32k_range, read_32kto64k_range,
       read_64kto128k_range, read_128kto256k_range, read_256kto512k_range, read_512kto1m_range,
@@ -325,7 +334,7 @@ tables:
     kind: counter
     status: draft
     basis: team answers to Q3, Q5, Q7 and Q15
-    note: Counted before or after splitting? See Q2.
+    note: Counted when the bio is submitted, before any split (Q2).
   - group: Read bio flags
     columns: [read_io_flags_req_fail_fast_dev, read_io_flags_req_fail_fast_transport, read_io_flags_req_fail_fast_driver,
       read_io_flags_req_sync, read_io_flags_req_meta, read_io_flags_req_prio, read_io_flags_req_nomerge,
@@ -358,11 +367,13 @@ tables:
       in the latency_buckets table, one row per bucket (ADR-0011): option_index 0 is lh_opt1
       (below the first threshold), i is bw_opt<i>_and_opt<i+1>, and n - the number of thresholds
       given - is overflow; its range column labels the bucket, for example 1-10 µs. Each lower
-      bound is included (Q12), and the buckets past the last threshold given stay 0 (Q16). Each
-      request is counted in one bucket, so together they count the
+      bound is included (Q12). overflow holds every request above the last threshold; with n
+      thresholds, the columns from bw_opt<n>_and_opt<n+1> to bw_opt15_and_opt16 are unused and
+      stay 0 (Q16). Each request is counted in one bucket, so together they count the
       completed reads (Q13). Collected separately from read_device_time_ns (Q8).'
     unit: count
     kind: counter
+    labels: latency_buckets
     status: draft
     basis: team answers to Q8 and Q11 to Q13; ADR-0011; field names
     note: Fewer than 16 thresholds - see Q16.
@@ -381,11 +392,13 @@ tables:
       in the latency_buckets table, one row per bucket (ADR-0011): option_index 0 is lh_opt1
       (below the first threshold), i is bw_opt<i>_and_opt<i+1>, and n - the number of thresholds
       given - is overflow; its range column labels the bucket, for example 1-10 µs. Each lower
-      bound is included (Q12), and the buckets past the last threshold given stay 0 (Q16). Each
-      request is counted in one bucket, so together they count the
+      bound is included (Q12). overflow holds every request above the last threshold; with n
+      thresholds, the columns from bw_opt<n>_and_opt<n+1> to bw_opt15_and_opt16 are unused and
+      stay 0 (Q16). Each request is counted in one bucket, so together they count the
       completed reads (Q13). Collected separately from read_block_driver_time_ns (Q8).'
     unit: count
     kind: counter
+    labels: latency_buckets
     status: draft
     basis: team answers to Q8 and Q11 to Q13; ADR-0011; field names
     note: Fewer than 16 thresholds - see Q16.
@@ -404,7 +417,7 @@ tables:
     basis: team answers to Q4 to Q7 and Q15
     note: 'For one size distribution that counts no bio twice, use write_lt_4kb, write_4kb to
       write_8mb, write_gt_8mb, and the ranges from write_4kto8k_range up - leave out
-      write_lt_4kb_range. Counted before or after splitting? See Q2.'
+      write_lt_4kb_range. Counted when the bio is submitted, before any split (Q2).'
   - group: 'Write size ranges: unaligned sizes'
     columns: [write_lt_4kb_range, write_4kto8k_range, write_8kto16k_range, write_16kto32k_range,
       write_32kto64k_range, write_64kto128k_range, write_128kto256k_range, write_256kto512k_range,
@@ -418,7 +431,7 @@ tables:
     kind: counter
     status: draft
     basis: team answers to Q3, Q5, Q7 and Q15
-    note: Counted before or after splitting? See Q2.
+    note: Counted when the bio is submitted, before any split (Q2).
   - group: Write bio flags
     columns: [write_io_flags_req_fail_fast_dev, write_io_flags_req_fail_fast_transport, write_io_flags_req_fail_fast_driver,
       write_io_flags_req_sync, write_io_flags_req_meta, write_io_flags_req_prio, write_io_flags_req_nomerge,
@@ -451,11 +464,13 @@ tables:
       in the latency_buckets table, one row per bucket (ADR-0011): option_index 0 is lh_opt1
       (below the first threshold), i is bw_opt<i>_and_opt<i+1>, and n - the number of thresholds
       given - is overflow; its range column labels the bucket, for example 1-10 µs. Each lower
-      bound is included (Q12), and the buckets past the last threshold given stay 0 (Q16). Each
-      request is counted in one bucket, so together they count the
+      bound is included (Q12). overflow holds every request above the last threshold; with n
+      thresholds, the columns from bw_opt<n>_and_opt<n+1> to bw_opt15_and_opt16 are unused and
+      stay 0 (Q16). Each request is counted in one bucket, so together they count the
       completed writes (Q13). Collected separately from write_device_time_ns (Q8).'
     unit: count
     kind: counter
+    labels: latency_buckets
     status: draft
     basis: team answers to Q8 and Q11 to Q13; ADR-0011; field names
     note: Fewer than 16 thresholds - see Q16.
@@ -474,11 +489,13 @@ tables:
       in the latency_buckets table, one row per bucket (ADR-0011): option_index 0 is lh_opt1
       (below the first threshold), i is bw_opt<i>_and_opt<i+1>, and n - the number of thresholds
       given - is overflow; its range column labels the bucket, for example 1-10 µs. Each lower
-      bound is included (Q12), and the buckets past the last threshold given stay 0 (Q16). Each
-      request is counted in one bucket, so together they count the
+      bound is included (Q12). overflow holds every request above the last threshold; with n
+      thresholds, the columns from bw_opt<n>_and_opt<n+1> to bw_opt15_and_opt16 are unused and
+      stay 0 (Q16). Each request is counted in one bucket, so together they count the
       completed writes (Q13). Collected separately from write_block_driver_time_ns (Q8).'
     unit: count
     kind: counter
+    labels: latency_buckets
     status: draft
     basis: team answers to Q8 and Q11 to Q13; ADR-0011; field names
     note: Fewer than 16 thresholds - see Q16.
@@ -498,13 +515,13 @@ metrics:
   formula: cumulative_read_io_size_bytes_delta / 1024 / nullIf(read_bios_delta, 0)
   unit: KiB
   status: draft
-  note: Depends on Q2.
+  note: A bio as submitted, before any split (Q2).
 - metric: avg_write_bio_size_kib
   meaning: Average size of a write bio when submitted.
   formula: cumulative_write_io_size_bytes_delta / 1024 / nullIf(write_bios_delta, 0)
   unit: KiB
   status: draft
-  note: Depends on Q2.
+  note: A bio as submitted, before any split (Q2).
 - metric: avg_read_device_time_us
   meaning: Average time a read I/O spent in the device, over the interval. Empty when there were no
     reads.

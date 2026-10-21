@@ -50,6 +50,19 @@ questions:
     be renamed.
   answer: 'Yes, unchanged. (Team, 2026-10-12) Runs are now loaded into a database of their own,
     so old and new names never meet in one table.'
+- id: Q4
+  question: 'On the first real run (2026-10-20), block_1 and block_2 count the same total of reads
+    plus writes (73,263,082) and the same bytes, but block_1 has 36 more read requests than block_2
+    has read bios (36,633,906 against 36,633,870), and its read sectors match block_2''s read bios
+    exactly, so the 36 extra reads carried no data. It also has 36 fewer write requests than block_2
+    has write bios, though its own merge counters show no merges. What are the 36 read requests
+    with no data? Something that is not a bio, which block_2 never sees?'
+  answer: 'A very few I/Os may not match between the collectors; accepted as it is for now. (User,
+    2026-10-20)'
+  note: 'Corrected on 2026-10-20: the question first said the 36 missing write requests matched
+    the 36 write back-merges block_2 saw, but block_1''s reads_merged_count and writes_merged_count
+    both changed by 0 over that run. A data check comparing the two tables should allow a small
+    difference, as for Q3 and Q13 of block_2.'
 tables:
 - table: linux_block_1_stats
   columns:

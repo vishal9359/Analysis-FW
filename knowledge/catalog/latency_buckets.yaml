@@ -1,0 +1,60 @@
+# =============================================================================
+#  Measurement Catalog - latency_buckets
+# =============================================================================
+#  What every column of this table means. The analysis reads this instead of
+#  guessing from column names. How to review: knowledge/README.md. In short:
+#    status: todo       something is missing - fill in each TODO
+#    status: draft      pre-filled from documents and field names - please check
+#    status: confirmed  checked by an engineer - set this when you are done
+#  Answer the questions first: they decide how the data checks are written.
+#
+#  Written for: src/runconfig.py - the loader writes this table itself, from the
+#  profiler's latency_bucket_options.yaml; there is no .proto (ADR-0011).
+#  Do not rename 'column' or 'columns' entries: they must match ClickHouse exactly.
+#  Check this file against the loader any time:  python tools/catalog.py check
+# =============================================================================
+
+table: latency_buckets
+source: src/runconfig.py
+schema_fingerprint: sha256:ce05c7deab2a37a7
+level: run
+collector: the loader, once per run
+collected_from: The file latency_bucket_options.yaml, which the profiler writes when it is
+  started with -lat-buckets (for example -lat-buckets 1,10,100,1000). The loader reads it once
+  per run and writes one row per bucket (src/runconfig.py, ADR-0011).
+sampling: Once per run - the thresholds are chosen when the profiler starts.
+observes: The ranges of the run's latency histograms - the latency bucket columns of
+  linux_block_2_misc - one row per bucket. n thresholds give n+1 buckets; bucket 0 is below the
+  first threshold and bucket n above the last. A run profiled without -lat-buckets has no such
+  table, and its histograms cannot be labelled.
+status: draft
+questions: []
+tables:
+- table: latency_buckets
+  columns:
+  - column: option_index
+    type: UInt16
+    meaning: The bucket's position, from 0 to n, where n is the number of thresholds given. It
+      matches the latency bucket columns of linux_block_2_misc - 0 is latency_lh_opt1, i is
+      latency_bw_opt<i>_and_opt<i+1>, and n is latency_overflow.
+    unit: position
+    kind: dimension
+    status: draft
+    basis: ADR-0011; src/runconfig.py bucket_rows
+  - column: range
+    type: String
+    meaning: The bucket's range, written for a chart legend in the largest sensible unit, for
+      example 1-10 µs or 100 µs - 1 ms; the two open ends read < 1 µs and > 1 s.
+    unit: text
+    kind: label
+    status: draft
+    basis: ADR-0011; src/runconfig.py format_us
+  - column: threshold_us
+    type: UInt64
+    meaning: The threshold that opens the bucket, in microseconds; 0 for the first and the last
+      bucket, which are open-ended (their bound is in range).
+    unit: microseconds
+    kind: setting
+    status: draft
+    basis: ADR-0011; src/runconfig.py bucket_rows
+metrics: []

@@ -18,6 +18,7 @@ schema_fingerprint differs) - so a description can never silently go stale.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -74,6 +75,36 @@ def schema_tables(stem: str, protos: Path):
     return tables, s.schema_version
 
 
+def runconfig_tables():
+    """The tables the loader writes from a run's sidecar files (src/runconfig.py) - no
+    .proto - as {table: [(column, path)]}, and a fingerprint of their columns."""
+    from src import runconfig
+    cols = [(c.name, (c.name,)) for c in runconfig.COLUMNS if c.name not in LOADER_COLUMNS]
+    text = "\n".join(f"{c.name} {c.ch_type}" for c in runconfig.COLUMNS)
+    return ({runconfig.TABLE: cols},
+            "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:16])
+
+
+def histogram_problems(catalog_dir: Path) -> list[str]:
+    """Across files: a group with `labels` names a described run-level table, and its
+    columns are counters of its own table (the buckets are matched by position)."""
+    from analysis import catalog as analysis_catalog
+    cat = analysis_catalog.load(catalog_dir)
+    problems = []
+    for table in cat.tables.values():
+        for h in table.histograms:
+            labels = cat.tables.get(h.labels)
+            if labels is None or labels.level != "run":
+                problems.append(f"{table.name}: histogram {h.name!r} is labelled by {h.labels!r}, "
+                                f"which is not a described run-level table")
+            not_counters = [c for c in h.columns
+                            if c not in table.columns or table.columns[c].kind != "counter"]
+            if not_counters:
+                problems.append(f"{table.name}: histogram {h.name!r}: not counters of this "
+                                f"table: {', '.join(not_counters[:6])}")
+    return problems
+
+
 def entry_problems(where: str, e: dict) -> list[str]:
     out = [f"{where}: missing '{k}'" for k in ("meaning", "unit", "kind", "status") if k not in e]
     if e.get("kind") not in KINDS | {"TODO"}:
@@ -94,15 +125,18 @@ def check_file(path: Path, protos: Path) -> tuple[list[str], str]:
             problems += entry_problems(f"{path.name}: {e.get('column')}", e)
         return problems, f"{len(doc.get('columns') or [])} shared columns"
 
-    stem = Path(str(doc.get("proto", ""))).stem
-    try:
-        expected, fingerprint = schema_tables(stem, protos)
-    except Exception as exc:                 # proto missing or does not compile
-        return [f"{path.name}: cannot read {stem}.proto: {exc}"], ""
+    if doc.get("source") == "src/runconfig.py":   # written by the loader, from a sidecar file
+        stem, (expected, fingerprint) = "src/runconfig.py", runconfig_tables()
+    else:
+        stem = Path(str(doc.get("proto", ""))).stem
+        try:
+            expected, fingerprint = schema_tables(stem, protos)
+        except Exception as exc:                 # proto missing or does not compile
+            return [f"{path.name}: cannot read {stem}.proto: {exc}"], ""
     if doc.get("schema_fingerprint") != fingerprint:
         problems.append(
-            f"{path.name}: {stem}.proto has changed since this file was written "
-            f"(file says {doc.get('schema_fingerprint')}, proto is {fingerprint}). Review the "
+            f"{path.name}: {stem} has changed since this file was written "
+            f"(file says {doc.get('schema_fingerprint')}, now {fingerprint}). Review the "
             f"descriptions, then set schema_fingerprint: {fingerprint}")
 
     kinds, statuses = {}, {s: 0 for s in STATUSES}
@@ -162,7 +196,10 @@ def cmd_check(args) -> int:
             print(f"        - {p}")
         failed += bool(problems)
     print(f"\n{len(files) - failed} of {len(files)} catalog file(s) match their protos.")
-    return 1 if failed else 0
+    across = histogram_problems(args.catalog) if not failed else []
+    for p in across:
+        print(f"FAIL  {p}")
+    return 1 if failed or across else 0
 
 
 def cmd_skeleton(args) -> int:

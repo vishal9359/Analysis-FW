@@ -1,0 +1,7 @@
+# Example request 5 of the requirements (docs/goals-and-requirements.md). "The last
+# 30 minutes" means of the run, not of the clock (A3); a shorter run is shown whole.
+# From the repo root, naming your run - the run folder's name or its path:
+#   python -m analysis ask requests/bandwidth-last-30-min.yaml --run <run folder>
+# (without --run, the run below is used: the simulated run of docs/development.md).
+run: ProfileData-fixture-20260727-180221
+request: Show the bandwidth trend for the last 30 minutes.
