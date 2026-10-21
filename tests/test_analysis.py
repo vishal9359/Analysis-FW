@@ -150,6 +150,13 @@ def test_step0_not_found_says_which_runs_are_loaded(cat):
         find_database(db, "ProfileData-nope", cat)
 
 
+def test_step0_a_database_name_given_as_the_run(cat):
+    db = FakeDB({DB: run_db()}, {DB: {RUN}})
+    with pytest.raises(RunError, match=rf"'{DB}' is the name of a database, not of a run\. "
+                                       rf"It holds {RUN}\. .*--db {DB}"):
+        find_database(db, DB, cat)
+
+
 def test_run_name_from_the_folder_name_or_its_path(tmp_path):
     assert run_name(RUN) == RUN
     assert run_name(f"/data/runs/{RUN}") == RUN

@@ -84,6 +84,11 @@ def find_database(db: Database, run: str, catalog: Catalog, database: str | None
         by_db = {database: by_db[database]}
     found = [d for d, tables in sorted(by_db.items())
              if any(db.has_run(d, t, run) for t in sorted(tables))]
+    if not found and run in by_db:          # a database's name, given as the run's
+        held = db.run_ids(run, sorted(by_db[run])[0])
+        raise RunError(f"{run!r} is the name of a database, not of a run. It holds "
+                       f"{', '.join(held[:5]) or 'no run'}. Give the run's name - the run "
+                       f"folder's name - and, if you like, --db {run}.")
     if not found:
         where = (f"database {database!r}" if database is not None else
                  f"any database with a described table ({', '.join(names)})")

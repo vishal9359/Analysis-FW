@@ -209,19 +209,21 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
   an apostrophe fails — use a script file, or the edit tools for code; add `-X utf8`
   when Python prints non-ASCII text.
 - **Office test box:** Linux (IST timezone), Python 3.12, **ClickHouse 26.6 in Docker
-  (26.6.1.1193, seen 2026-10-22) at `localhost:8123`, no password**; Grafana (container, ClickHouse plugin); WrenAI
-  installed. ClickHouse's `default` user has no password and may log in only from the
-  box itself (the Docker image's default), so another machine gets "Authentication
-  failed" until its address is allowed. `tools/check_phase1_env.py` takes ClickHouse's
-  host and port from the `"clickhouse"` block of `tools/config.json`, else from
-  `config/config.yaml` (the loader's and `python -m analysis`'s); requests to localhost
-  bypass any proxy. The user pulls the repo there to run against real data, which never
-  leaves it. Runs are loaded one database per run by the team's `deploy.py`. The
-  company LLM gateway is OpenAI-compatible, serves only `/chat/completions` and needs
-  custom headers — all in `tools/config.json`. Python `requests` needs
-  `REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt` for outside HTTPS. Phase 1
-  readiness is checked there with `python tools/check_phase1_env.py` (standard
-  library only).
+  (26.6.1.1193, seen 2026-10-22) at `localhost:8123`, no password**; Grafana
+  (container, ClickHouse plugin); WrenAI installed. Runs are loaded there, one database
+  per run, by the team's `deploy.py`. ClickHouse's `default` user has no password and
+  may log in only from the box itself (the Docker image's default), so another machine
+  gets "Authentication failed" until its address is allowed.
+- **Office Windows machine:** where the user runs Phase 1 (`python -m analysis`, the
+  readiness check) since 2026-10-22, because the company LLM API is reached from there.
+  It uses the box's ClickHouse and Grafana over the office network: `config/config.yaml`
+  (for `python -m analysis`) and the `"clickhouse"` block of `tools/config.json` (for the
+  check, which falls back to `config/config.yaml`) name the box's address, and the box
+  lets this machine's address in. Query results reach this machine. The LLM gateway is
+  OpenAI-compatible, serves only `/chat/completions` and needs custom headers — all in
+  `tools/config.json`. Requests to localhost bypass any proxy; Python `requests` needs
+  `REQUESTS_CA_BUNDLE` pointed at the system certificates for outside HTTPS on the box.
+  Phase 1 readiness: `python tools/check_phase1_env.py` (standard library only).
 
 ## How this project's context is organized (so it scales)
 
