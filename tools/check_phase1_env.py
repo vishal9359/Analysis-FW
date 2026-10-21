@@ -37,12 +37,13 @@ rateLimitSeconds, and numCtx for a local Ollama model) and the
 optional "clickhouse" and "grafana" blocks. Environment variables CH_URL,
 CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE, GRAFANA_URL,
 GRAFANA_TOKEN, GRAFANA_USER and GRAFANA_PASSWORD override the file.
-Defaults: ClickHouse at http://localhost:8123 (user default, database
-profile_fw), Grafana at http://localhost:3000. This check does not read
-config/config.yaml, where the loader and `python -m analysis` find ClickHouse:
-give it the same host and port in the "clickhouse" block. Each run is loaded
-into a database of its own, so set "database" there to one run's database
-(or use --ch-database); the check lists the databases that hold runs.
+ClickHouse's host and port come from config/config.yaml, as for the loader and
+`python -m analysis` (CH_HOST / CH_PORT override; so do --ch-host / --ch-port
+or CH_URL); the "clickhouse" block's host and port are used only when that
+file cannot be read. Each run is loaded into a database of its own: the check
+uses the block's "database" when it holds runs, else the most recently loaded
+run's database. Defaults: user default, Grafana at http://localhost:3000.
+Requests to localhost never go through a proxy.
 Behind a company proxy, set HTTPS_PROXY / NO_PROXY as usual.
 Run `python tools/check_phase1_env.py --help` for every option, and
 `python tools/check_llm.py` for a quick LLM-only check.
@@ -73,6 +74,9 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import llm_config  # noqa: E402  (tools/llm_config.py)
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOADER_CONFIG = os.path.join(ROOT, "config", "config.yaml")
 
 PASS, FAIL, WARN, INFO, SKIP = "PASS", "FAIL", "WARN", "INFO", "SKIP"
 RESULTS: list[dict] = []
@@ -249,6 +253,35 @@ EXPECTED_TABLES = [
 ]
 
 
+def loader_address():
+    """(host, port, where from) of the ClickHouse the loader writes to and
+    `python -m analysis` reads: config/config.yaml's store block, with CH_HOST /
+    CH_PORT applied as the loader applies them. None if it cannot be read."""
+    env = [v for v in ("CH_HOST", "CH_PORT") if os.environ.get(v)]
+    where = "config/config.yaml" + (f" and {' / '.join(env)}" if env else "")
+    try:
+        sys.path.insert(0, ROOT)
+        from src.config import load_config     # the loader's own reader (needs PyYAML)
+        store = load_config().store
+        return store.host, int(store.port), where
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001 - no such file, or a broken one
+        return None
+    try:                                         # standard library only: the store block
+        with open(LOADER_CONFIG, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    block = re.search(r"^store:[ \t]*(?:#.*)?\n((?:[ \t]+.*(?:\n|$))+)", text, re.M)
+    found = dict(re.findall(r"^[ \t]+(host|port):[ \t]*([^#\s]+)", block.group(1), re.M)) \
+        if block else {}
+    if "host" not in found or "port" not in found:
+        return None
+    return (os.environ.get("CH_HOST", found["host"].strip("'\"")),
+            int(os.environ.get("CH_PORT", found["port"].strip("'\""))), where)
+
+
 class ClickHouse:
     def __init__(self, args):
         self.url = (args.ch_url or f"http://{args.ch_host}:{args.ch_port}").rstrip("/") + "/"
@@ -300,23 +333,41 @@ FROM
 
 def check_clickhouse(args, ctx) -> None:
     g = "clickhouse"
-    if not re.fullmatch(r"[A-Za-z0-9_]+", args.ch_database):
-        record(g, "connection", FAIL, f"invalid database name {args.ch_database!r}")
-        return
     ch = ClickHouse(args)
     rows, err = ch.query("SELECT version() AS version, timezone() AS tz, "
                          "currentUser() AS user", use_db=False)
     if err:
+        same = (", the one `python -m src` and `python -m analysis` use"
+                if args.ch_source.startswith("config/config.yaml") else "")
         record(g, "connection", FAIL,
-               f"cannot reach {ch.url}. This check takes ClickHouse's address from the "
-               f"\"clickhouse\" block of tools/config.json (or --ch-host / --ch-port), "
-               f"not from config/config.yaml: set the same host and port as there. "
+               f"cannot reach {ch.url} - the address from {args.ch_source}{same}. "
                f"Error: {err}")
         return
     info = rows[0]
     record(g, "connection", PASS,
-           f"ClickHouse {info['version']}, user {info['user']}, server timezone {info['tz']}")
+           f"ClickHouse {info['version']} at {ch.url} (from {args.ch_source}), user "
+           f"{info['user']}, server timezone {info['tz']}")
     ctx["ch"] = ch
+    old = (args.cfg or {}).get("clickhouse") or {}
+    ignored = [f"{k} {old[k]}" for k in ("host", "port")
+               if old.get(k) not in (None, "") and str(old[k]) != str(getattr(args, f"ch_{k}"))]
+    if ignored and args.ch_source.startswith("config/config.yaml"):
+        record(g, "settings", INFO,
+               f"the {' and '.join(ignored)} in the \"clickhouse\" block of tools/config.json "
+               f"{'is' if len(ignored) == 1 else 'are'} not used: the address comes from "
+               f"config/config.yaml, as for the loader")
+
+    # each run is loaded into a database of its own: use one that holds runs
+    rows, _ = ch.query("SELECT database FROM system.tables WHERE name = 'linux_block_1_stats' "
+                       "ORDER BY metadata_modification_time DESC LIMIT 50", use_db=False)
+    with_runs = [r["database"] for r in rows or []]
+    if with_runs and args.ch_database not in with_runs:
+        record(g, "database", INFO,
+               f"{args.ch_database!r} holds no runs; using {with_runs[0]}, the most recently "
+               f"loaded of the {len(with_runs)} database(s) that do. To choose another, set "
+               f"\"database\" in the \"clickhouse\" block of tools/config.json, or use "
+               f"--ch-database")
+        args.ch_database = ch.db = with_runs[0]
 
     rows, err = ch.query("SHOW GRANTS", use_db=False)
     if err:
@@ -346,16 +397,7 @@ def check_clickhouse(args, ctx) -> None:
            + (f"; not in the sample protos: {', '.join(extra)}" if extra else ""),
            tables=names)
     if "linux_block_1_stats" not in names:
-        # each run is loaded into a database of its own: say which ones hold runs
-        rows, _ = ch.query("SELECT DISTINCT database FROM system.tables WHERE "
-                           "name = 'linux_block_1_stats' ORDER BY database LIMIT 20",
-                           use_db=False)
-        found = [r["database"] for r in rows or []]
-        record(g, "runs", SKIP,
-               f"linux_block_1_stats not found in {args.ch_database}"
-               + (f"; databases that have it: {', '.join(found)} - set one as "
-                  f"\"database\" in the \"clickhouse\" block of tools/config.json, or "
-                  f"use --ch-database" if found else ""))
+        record(g, "runs", SKIP, f"no database has linux_block_1_stats: no run is loaded")
         return
 
     rows, err = ch.query("SELECT run_id, count() AS samples, min(ts) AS first, "
@@ -1271,9 +1313,12 @@ def parse_args(argv):
     a("--llm-timeout", type=float, default=None,
       help="timeout in seconds for the heavier LLM checks (default: the larger of "
            "timeoutSeconds and 120)")
-    a("--ch-url", default=e("CH_URL", chc.get("url"), ""))
-    a("--ch-host", default=e("CH_HOST", chc.get("host"), "localhost"))
-    a("--ch-port", default=e("CH_PORT", chc.get("port"), "8123"))
+    a("--ch-url", default=e("CH_URL", chc.get("url"), ""),
+      help="ClickHouse's HTTP address, instead of config/config.yaml's host and port")
+    a("--ch-host", default=None,
+      help="default: store.host in config/config.yaml (CH_HOST overrides), as for the loader")
+    a("--ch-port", default=None,
+      help="default: store.port in config/config.yaml (CH_PORT overrides), as for the loader")
     a("--ch-user", default=e("CH_USER", chc.get("user"), "default"))
     a("--ch-password", default=e("CH_PASSWORD", chc.get("password"), ""))
     a("--ch-database", default=e("CH_DATABASE", chc.get("database"), "profile_fw"))
@@ -1302,7 +1347,31 @@ def parse_args(argv):
     a("--html-out", default="phase1_check_chart.html")
     args = p.parse_args(argv)
     args.cfg, args.cfg_error = cfg, cfg_error
+    args.ch_source = clickhouse_address(args, chc)
     return args
+
+
+def clickhouse_address(args, chc: dict) -> str:
+    """Fill in ClickHouse's host and port, and say where they came from: the options
+    if given, else config/config.yaml - the address the loader and `python -m
+    analysis` use - and tools/config.json's "clickhouse" block only when that file
+    cannot be read."""
+    if args.ch_url:
+        return "--ch-url, CH_URL or clickhouse.url in tools/config.json"
+    loader = loader_address()
+    if loader is not None:
+        host, port, where = loader
+    else:
+        host = os.environ.get("CH_HOST", chc.get("host") or "localhost")
+        port = os.environ.get("CH_PORT", chc.get("port") or 8123)
+        where = ("tools/config.json - config/config.yaml could not be read"
+                 if chc.get("host") or chc.get("port") else "the defaults")
+    if args.ch_host is not None or args.ch_port is not None:
+        where = "--ch-host / --ch-port" + (
+            f", and {where}" if None in (args.ch_host, args.ch_port) else "")
+    args.ch_host = host if args.ch_host is None else args.ch_host
+    args.ch_port = port if args.ch_port is None else args.ch_port
+    return where
 
 
 def main(argv=None) -> int:
@@ -1336,6 +1405,7 @@ def main(argv=None) -> int:
             "config_file": os.path.abspath(args.config or llm_config.DEFAULT_PATH),
             "llm": ctx.get("llm_summary") or {"not_loaded": args.cfg_error},
             "clickhouse": args.ch_url or f"{args.ch_host}:{args.ch_port}",
+            "clickhouse_address_from": args.ch_source,
             "clickhouse_user": args.ch_user, "clickhouse_database": args.ch_database,
             "grafana_url": args.grafana_url,
             "grafana_auth": "token" if args.grafana_token

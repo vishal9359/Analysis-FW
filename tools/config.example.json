@@ -19,11 +19,9 @@
     }
   },
   "clickhouse": {
-    "host": "localhost",
-    "port": 8123,
     "user": "default",
     "password": "",
-    "database": "profile_fw"
+    "database": ""
   },
   "grafana": {
     "url": "http://localhost:3000",

@@ -22,7 +22,10 @@ import os
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_PATH = os.path.join(HERE, "config.json")
@@ -170,16 +173,24 @@ def send(method, url, headers=None, json_body=None, data=None, timeout=60, verif
     With `requests` when it is installed - its certificate bundle (and
     REQUESTS_CA_BUNDLE), proxy settings and User-Agent, and header names sent
     exactly as written. Falls back to urllib only when requests is missing.
+    A request to this machine itself (localhost) never goes through a proxy:
+    HTTP_PROXY is for the outside, and a proxy cannot reach our own services.
     Returns (status or None, response text, seconds, error text or None)."""
     t0 = time.monotonic()
+    try:
+        local = (urllib.parse.urlsplit(url).hostname or "") in LOCAL_HOSTS
+    except ValueError:
+        local = False
     try:
         import requests
     except ImportError:
         requests = None
     if requests is not None:
         try:
-            r = requests.request(method, url, headers=headers, json=json_body, data=data,
-                                 timeout=timeout, verify=verify)
+            with requests.Session() as session:
+                session.trust_env = not local        # environment proxies: outside only
+                r = session.request(method, url, headers=headers, json=json_body, data=data,
+                                    timeout=timeout, verify=verify)
             return r.status_code, r.text, time.monotonic() - t0, None
         except Exception as exc:  # refused, DNS, TLS, timeout
             return None, "", time.monotonic() - t0, f"{type(exc).__name__}: {exc}"
@@ -198,8 +209,11 @@ def send(method, url, headers=None, json_body=None, data=None, timeout=60, verif
         if not verify:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
+    handlers = [urllib.request.HTTPSHandler(context=ctx)] if ctx else []
+    if local:
+        handlers.append(urllib.request.ProxyHandler({}))      # no proxy for localhost
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with urllib.request.build_opener(*handlers).open(req, timeout=timeout) as resp:
             return (resp.status, resp.read().decode("utf-8", "replace"),
                     time.monotonic() - t0, None)
     except urllib.error.HTTPError as exc:
