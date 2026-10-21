@@ -210,9 +210,12 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
   when Python prints non-ASCII text.
 - **Office test box:** Linux (IST timezone), Python 3.12, **ClickHouse 25.6 in Docker
   at `localhost:8123`, no password**; Grafana (container, ClickHouse plugin); WrenAI
-  installed. Everything — the loader, `python -m analysis`
-  and `tools/check_phase1_env.py` — takes ClickHouse's address from
-  `config/config.yaml`; requests to localhost bypass any proxy. The user pulls the repo there to run against real data, which never
+  installed. ClickHouse's `default` user has no password and may log in only from the
+  box itself (the Docker image's default), so another machine gets "Authentication
+  failed" until its address is allowed. `tools/check_phase1_env.py` takes ClickHouse's
+  host and port from the `"clickhouse"` block of `tools/config.json`, else from
+  `config/config.yaml` (the loader's and `python -m analysis`'s); requests to localhost
+  bypass any proxy. The user pulls the repo there to run against real data, which never
   leaves it. Runs are loaded one database per run by the team's `deploy.py`. The
   company LLM gateway is OpenAI-compatible, serves only `/chat/completions` and needs
   custom headers — all in `tools/config.json`. Python `requests` needs

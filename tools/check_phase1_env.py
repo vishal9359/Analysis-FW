@@ -37,13 +37,13 @@ rateLimitSeconds, and numCtx for a local Ollama model) and the
 optional "clickhouse" and "grafana" blocks. Environment variables CH_URL,
 CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE, GRAFANA_URL,
 GRAFANA_TOKEN, GRAFANA_USER and GRAFANA_PASSWORD override the file.
-ClickHouse's host and port come from config/config.yaml, as for the loader and
-`python -m analysis` (CH_HOST / CH_PORT override; so do --ch-host / --ch-port
-or CH_URL); the "clickhouse" block's host and port are used only when that
-file cannot be read. Each run is loaded into a database of its own: the check
-uses the block's "database" when it holds runs, else the most recently loaded
-run's database. Defaults: user default, Grafana at http://localhost:3000.
-Requests to localhost never go through a proxy.
+ClickHouse's host and port: --ch-host / --ch-port, else CH_HOST / CH_PORT, else
+the "clickhouse" block's host and port, else config/config.yaml's - the address
+the loader and `python -m analysis` use on this machine. Each run is loaded
+into a database of its own: the check uses the block's "database" when it holds
+runs, else the most recently loaded run's database. Defaults: user default,
+Grafana at http://localhost:3000. Requests to localhost never go through a
+proxy.
 Behind a company proxy, set HTTPS_PROXY / NO_PROXY as usual.
 Run `python tools/check_phase1_env.py --help` for every option, and
 `python tools/check_llm.py` for a quick LLM-only check.
@@ -254,16 +254,14 @@ EXPECTED_TABLES = [
 
 
 def loader_address():
-    """(host, port, where from) of the ClickHouse the loader writes to and
-    `python -m analysis` reads: config/config.yaml's store block, with CH_HOST /
-    CH_PORT applied as the loader applies them. None if it cannot be read."""
-    env = [v for v in ("CH_HOST", "CH_PORT") if os.environ.get(v)]
-    where = "config/config.yaml" + (f" and {' / '.join(env)}" if env else "")
+    """(host, port) of the ClickHouse the loader writes to and `python -m analysis`
+    reads on this machine: config/config.yaml's store block, with CH_HOST / CH_PORT
+    applied as the loader applies them. None if it cannot be read."""
     try:
         sys.path.insert(0, ROOT)
         from src.config import load_config     # the loader's own reader (needs PyYAML)
         store = load_config().store
-        return store.host, int(store.port), where
+        return store.host, int(store.port)
     except ImportError:
         pass
     except Exception:  # noqa: BLE001 - no such file, or a broken one
@@ -279,7 +277,7 @@ def loader_address():
     if "host" not in found or "port" not in found:
         return None
     return (os.environ.get("CH_HOST", found["host"].strip("'\"")),
-            int(os.environ.get("CH_PORT", found["port"].strip("'\""))), where)
+            int(os.environ.get("CH_PORT", found["port"].strip("'\""))))
 
 
 class ClickHouse:
@@ -348,14 +346,6 @@ def check_clickhouse(args, ctx) -> None:
            f"ClickHouse {info['version']} at {ch.url} (from {args.ch_source}), user "
            f"{info['user']}, server timezone {info['tz']}")
     ctx["ch"] = ch
-    old = (args.cfg or {}).get("clickhouse") or {}
-    ignored = [f"{k} {old[k]}" for k in ("host", "port")
-               if old.get(k) not in (None, "") and str(old[k]) != str(getattr(args, f"ch_{k}"))]
-    if ignored and args.ch_source.startswith("config/config.yaml"):
-        record(g, "settings", INFO,
-               f"the {' and '.join(ignored)} in the \"clickhouse\" block of tools/config.json "
-               f"{'is' if len(ignored) == 1 else 'are'} not used: the address comes from "
-               f"config/config.yaml, as for the loader")
 
     # each run is loaded into a database of its own: use one that holds runs
     rows, _ = ch.query("SELECT database FROM system.tables WHERE name = 'linux_block_1_stats' "
@@ -1314,11 +1304,13 @@ def parse_args(argv):
       help="timeout in seconds for the heavier LLM checks (default: the larger of "
            "timeoutSeconds and 120)")
     a("--ch-url", default=e("CH_URL", chc.get("url"), ""),
-      help="ClickHouse's HTTP address, instead of config/config.yaml's host and port")
+      help="ClickHouse's HTTP address, instead of a host and a port")
     a("--ch-host", default=None,
-      help="default: store.host in config/config.yaml (CH_HOST overrides), as for the loader")
+      help="default: CH_HOST, else clickhouse.host in tools/config.json, else store.host "
+           "in config/config.yaml")
     a("--ch-port", default=None,
-      help="default: store.port in config/config.yaml (CH_PORT overrides), as for the loader")
+      help="default: CH_PORT, else clickhouse.port in tools/config.json, else store.port "
+           "in config/config.yaml")
     a("--ch-user", default=e("CH_USER", chc.get("user"), "default"))
     a("--ch-password", default=e("CH_PASSWORD", chc.get("password"), ""))
     a("--ch-database", default=e("CH_DATABASE", chc.get("database"), "profile_fw"))
@@ -1352,26 +1344,26 @@ def parse_args(argv):
 
 
 def clickhouse_address(args, chc: dict) -> str:
-    """Fill in ClickHouse's host and port, and say where they came from: the options
-    if given, else config/config.yaml - the address the loader and `python -m
-    analysis` use - and tools/config.json's "clickhouse" block only when that file
-    cannot be read."""
+    """Fill in ClickHouse's host and port, each from the first of: --ch-host /
+    --ch-port, CH_HOST / CH_PORT, the "clickhouse" block of tools/config.json, and
+    config/config.yaml - the address the loader and `python -m analysis` use on this
+    machine. Returns where they came from."""
     if args.ch_url:
         return "--ch-url, CH_URL or clickhouse.url in tools/config.json"
     loader = loader_address()
-    if loader is not None:
-        host, port, where = loader
-    else:
-        host = os.environ.get("CH_HOST", chc.get("host") or "localhost")
-        port = os.environ.get("CH_PORT", chc.get("port") or 8123)
-        where = ("tools/config.json - config/config.yaml could not be read"
-                 if chc.get("host") or chc.get("port") else "the defaults")
-    if args.ch_host is not None or args.ch_port is not None:
-        where = "--ch-host / --ch-port" + (
-            f", and {where}" if None in (args.ch_host, args.ch_port) else "")
-    args.ch_host = host if args.ch_host is None else args.ch_host
-    args.ch_port = port if args.ch_port is None else args.ch_port
-    return where
+    found = {}
+    for i, key in enumerate(("host", "port")):
+        for value, where in ((getattr(args, f"ch_{key}"), f"--ch-{key}"),
+                             (os.environ.get(f"CH_{key.upper()}"), f"CH_{key.upper()}"),
+                             (chc.get(key), "tools/config.json"),
+                             (loader[i] if loader else None, "config/config.yaml"),
+                             (("localhost", 8123)[i], "the default")):
+            if value not in (None, ""):
+                setattr(args, f"ch_{key}", value)
+                found[key] = where
+                break
+    return found["host"] if found["host"] == found["port"] else \
+        f"{found['host']} (host) and {found['port']} (port)"
 
 
 def main(argv=None) -> int:
