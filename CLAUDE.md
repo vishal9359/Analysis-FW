@@ -42,6 +42,8 @@ docs/
 │                             request to Grafana graph; Phase 2+ = automated reports
 ├── phase1-design.md          ← Phase 1 design: who does what (ours · WrenAI · our LLM),
 │                             request flow, views, Grafana, checks, build order (DRAFT)
+├── phase1-runbook.md         ← running Phase 1 on the office machines: setup, every
+│                             command, what each does inside, the errors seen so far
 ├── phase1-tool-research.md   ← open-source tool comparison for Phase 1 (+ sources)
 ├── Profile-code-flow.md      ← how Profile FW works: eBPF → maps → Go collectors → .pb
 ├── Tracepoints-details.md    ← every tracepoint / kprobe / sysfs source, per collector
@@ -87,7 +89,8 @@ where it and an ADR disagree, the ADR wins.
 | Picking up the work: what is done, what is next, what is pending | [docs/roadmap.md](docs/roadmap.md), "Now — Phase 1" |
 | Planning next work / POC 2 / what's deferred | [docs/roadmap.md](docs/roadmap.md) |
 | Working on Phase 1 (plain-language request to graph) | [docs/phase1-design.md](docs/phase1-design.md), then [docs/goals-and-requirements.md](docs/goals-and-requirements.md) + [docs/phase1-tool-research.md](docs/phase1-tool-research.md) |
-| Setting up a machine / running Phase 1 commands | [docs/development.md](docs/development.md), "Phase 1" (ClickHouse in WSL2, a simulated run) |
+| Running Phase 1 on the office machines (setup, commands, what each does, errors) | [docs/phase1-runbook.md](docs/phase1-runbook.md) |
+| Setting up a dev machine / trying Phase 1 on a simulated run | [docs/development.md](docs/development.md), "Phase 1" (ClickHouse in WSL2) |
 | Reviewing or extending the Measurement Catalog | [knowledge/README.md](knowledge/README.md) |
 | Working on the Phase 2 report system | [docs/goals-and-requirements.md](docs/goals-and-requirements.md) (Phase 2 part) |
 | Designing the Phase 2 report system | [docs/analysis-architecture.md](docs/analysis-architecture.md) (draft) |
@@ -101,11 +104,11 @@ where it and an ADR disagree, the ADR wins.
 ## Status (keep this current)
 
 The full board — done, next, waiting, known issues — is [docs/roadmap.md](docs/roadmap.md),
-"Now — Phase 1". In short (2026-10-21):
+"Now — Phase 1". In short (2026-10-22):
 
 - **Branch:** Phase 1 work is on **`phase1`**, rebased onto `main` on 2026-10-20 (it has
-  `main`'s `latency_buckets` loader); not yet merged. All 93 tests pass (46 loader,
-  47 Phase 1); `python tools/catalog.py check` passes.
+  `main`'s `latency_buckets` loader); not yet merged. All 96 tests pass (46 loader,
+  50 Phase 1); `python tools/catalog.py check` passes.
 - **Done:** Module 1 loader, including run-level sidecars (`latency_buckets`,
   ADR-0011). Phase 1 requirements, tool choice (WrenAI trial, Grafana draws), office-box
   readiness check, design ([docs/phase1-design.md](docs/phase1-design.md)), Measurement
@@ -117,8 +120,8 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
   are rows of `latency_buckets`, not columns of `block_2`; `device` holds `nvme1n1`.
 - **Built 2026-10-21, run on a simulated run only:** the whole request for the block
   layer — `python -m analysis ask` (our LLM's steps 1, 3, 7; checks C2, C3; the Grafana
-  writer; a record per request) and labelled latency histograms (a
-  `<table>_histograms` view per run). Run end to end on ClickHouse 25.6 and Grafana
+  writer; a record per request, and an LLM log with every request and response in
+  full) and labelled latency histograms (a `<table>_histograms` view per run). Run end to end on ClickHouse 25.6 and Grafana
   13.2.4 in WSL2 with a stand-in for our LLM; never yet with our LLM.
 - **Next:** on the office box, `ask` with our LLM on the real run (the files in
   `requests/`), then the user's review of the block layer; then the trial test set.

@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 from analysis import catalog as catalog_mod  # noqa: E402
 from analysis.checks import explanation_problems  # noqa: E402
 from analysis.grafana import choose_panel, dashboard_uid, panel  # noqa: E402
-from analysis.llm import json_object  # noqa: E402
+from analysis.llm import Llm, LlmError, json_object  # noqa: E402
 from analysis.runner import Request, Runner, load_request  # noqa: E402
 from analysis.runs import RunError  # noqa: E402
 from analysis.steps import StepError, bounds, parse_meaning  # noqa: E402
@@ -341,6 +341,52 @@ def test_c3_checks_names_not_plain_words():
     assert explanation_problems(ok, [], "", names, sql) == []
     assert explanation_problems("Also write_iops.", [], "", names, sql) == \
         ["write_iops is mentioned, but the query does not use it"]
+
+
+def test_the_llm_log_holds_each_request_and_response(tmp_path, monkeypatch):
+    from tools import llm_config
+    replies = [(200, json.dumps({"choices": [{"message": {"content": '```json\n{"a": 1}\n```'},
+                                              "finish_reason": "stop"}],
+                                 "usage": {"prompt_tokens": 10, "completion_tokens": 3}}),
+                0.5, None),
+               (500, "gateway overloaded", 0.1, None)]
+    monkeypatch.setattr(llm_config, "send", lambda *a, **kw: replies.pop(0))
+    llm = Llm({"llm": {"baseUrl": "http://gateway.test/v1", "defaultModel": "m1",
+                       "apiKey": "SECRET-KEY",
+                       "customHeaders": {"x-dep-ticket": "SECRET-TICKET", "User-Id": "SECRET-ID"},
+                       "payload": {"temperature": 0.1, "max_tokens": 2048}}})
+    log = tmp_path / "x.llm.txt"
+    llm.log_to(log, "run: R\nrequest: Show read IOPS")
+    assert llm.ask_json("1 understand", "SYSTEM RULES", "USER PROMPT") == {"a": 1}
+    with pytest.raises(LlmError, match="HTTP 500"):
+        llm.ask_json("3 write query", "QUERY RULES", "THE MEANING")
+    text = log.read_text(encoding="utf-8")
+    assert text.startswith("run: R\nrequest: Show read IOPS")
+    for expected in ("LLM call 1 - step 1 understand", "POST http://gateway.test/v1/chat/completions",
+                     "Authorization, Content-Type, User-Id, x-dep-ticket (values are not logged)",
+                     'model: "m1", temperature: 0.1, max_tokens: 2048',
+                     "---- system message (12 characters) ----\nSYSTEM RULES",
+                     "---- user message (11 characters) ----\nUSER PROMPT",
+                     "HTTP 200 - finish_reason: stop - tokens: prompt 10, completion 3",
+                     '---- the JSON object the code uses ----\n{\n  "a": 1\n}',
+                     "LLM call 2 - step 3 write query", "THE MEANING",
+                     "HTTP 500", "---- the response body ----\ngateway overloaded"):
+        assert expected in text, expected
+    assert "SECRET" not in text                       # header values never reach the log
+    assert llm.calls[0].finish_reason == "stop" and not llm.calls[1].ok
+
+
+def test_the_llm_log_sits_beside_the_record(cat, tmp_path):
+    class LoggingLlm(ScriptedLlm):
+        def log_to(self, path, title=""):
+            self.log_path, self.title = path, title
+
+    llm = LoggingLlm([{"answerable": False, "summary": "", "measures": [],
+                       "not_available": [{"part": "GPU", "reason": "not described yet"}]}])
+    outcome, record, _, _ = ask(cat, tmp_path, llm, [])
+    assert outcome.llm_log == llm.log_path and outcome.llm_log.name.endswith(".llm.txt")
+    assert outcome.llm_log.name[:-len(".llm.txt")] == outcome.record.stem
+    assert record["llm_log"] == str(outcome.llm_log) and "request: Show read IOPS" in llm.title
 
 
 def test_a_reply_may_wrap_its_json():

@@ -246,11 +246,14 @@ def cmd_ask(args) -> int:
         outcome = runner.ask(request)
     finally:
         db.close()
+    files = f"record: {outcome.record}" + (
+        f"\nLLM log (each request to our LLM and its response): {outcome.llm_log}"
+        if outcome.llm_log else "")
     if outcome.status in ("drawn", "answered"):
-        print(f"\nrecord: {outcome.record}")
+        print(f"\n{files}")
         return 0
     label = "NOT RUN" if outcome.status == "declined" else "STOP"
-    print(f"\n{label}: {outcome.message}\nrecord: {outcome.record}")
+    print(f"\n{label}: {outcome.message}\n{files}")
     return 0 if outcome.status == "declined" else 1
 
 

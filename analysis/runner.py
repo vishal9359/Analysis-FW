@@ -14,7 +14,8 @@ The explanation is written before the panel is saved, so the panel carries it. A
 failure at step 4 or 5 goes back to step 3 with the reason, at most twice; then the
 request stops with the reason - a wrong graph is never drawn as if it were right. Every
 request leaves a record in out/<run>/: the request, the meaning, every query and why it
-was refused, the checks, the result summary, the explanation and the link.
+was refused, the checks, the result summary, the explanation and the link. Beside it,
+<same name>.llm.txt holds every request sent to our LLM and its response, in full.
 """
 from __future__ import annotations
 
@@ -76,6 +77,7 @@ class Outcome:
     message: str
     record: Path | None = None
     link: str | None = None
+    llm_log: Path | None = None    # every request to our LLM and its response
 
     @property
     def ok(self) -> bool:
@@ -137,19 +139,33 @@ class Runner:
         rec: dict = {"request": {"run": request.run, "request": request.text, "db": request.db},
                      "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                      "steps": {}}
-        run_id = request.run
+        stem = f"{datetime.now():%Y%m%d-%H%M%S}-{slug(request.text)}"
+        run_id, log = request.run, None
         try:
             run_id = run_name(request.run)
+            log = self._start_llm_log(run_id, stem, request)
             outcome = self._ask(request, run_id, rec)
         except Stop as stop:
             outcome = Outcome(stop.status, str(stop))
         except (RunError, LlmError, GrafanaError) as exc:
             outcome = Outcome("stopped", str(exc))
         rec["llm_calls"] = [c.as_dict() for c in getattr(self.llm, "calls", [])]
+        rec["llm_log"] = str(log) if log else None
         rec["outcome"] = {"status": outcome.status, "message": outcome.message,
                           "link": outcome.link}
-        outcome.record = self._save(run_id, request.text, rec)
+        outcome.record = self._save(run_id, stem, rec)
+        outcome.llm_log = log
         return outcome
+
+    def _start_llm_log(self, run_id: str, stem: str, request: Request) -> Path | None:
+        """<stem>.llm.txt beside the record: each request to our LLM and its response,
+        written as it happens - so it is there even if the request stops half-way."""
+        if not hasattr(self.llm, "log_to"):          # a stand-in for our LLM, in tests
+            return None
+        path = self.out / (run_id or "unknown-run") / f"{stem}.llm.txt"
+        self.llm.log_to(path, f"python -m analysis ask - {datetime.now():%Y-%m-%d %H:%M:%S}\n"
+                              f"run: {run_id}\nrequest: {request.text}")
+        return path
 
     # ---- the steps -----------------------------------------------------------------
 
@@ -346,9 +362,9 @@ class Runner:
         tries.append({"fallback": "written by code from the result summary"})
         return plain_explanation(meaning, run, b, summary, units, how)
 
-    def _save(self, run_id: str, text: str, rec: dict) -> Path:
+    def _save(self, run_id: str, stem: str, rec: dict) -> Path:
         folder = self.out / (run_id or "unknown-run")
         folder.mkdir(parents=True, exist_ok=True)
-        path = folder / f"{datetime.now():%Y%m%d-%H%M%S}-{slug(text)}.json"
+        path = folder / f"{stem}.json"
         path.write_text(json.dumps(rec, indent=2, default=str), encoding="utf-8")
         return path

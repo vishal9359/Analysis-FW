@@ -133,7 +133,14 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
   catalog keys.
 - **Example requests** in `requests/`: the five of the requirements, and a latency
   distribution.
-- **Tests:** 93 in all — 46 for the loader, 29 in `tests/test_analysis.py`, 18 in
+- **The LLM log (2026-10-22):** beside each record, `<same name>.llm.txt` holds every
+  request sent to our LLM and its response in full — header names only, never their
+  values — so what our LLM is asked and answers can be read directly.
+- **The runbook (2026-10-22):** [phase1-runbook.md](phase1-runbook.md) — running Phase 1
+  on the office machines, every command, what each does inside, and the errors seen
+  setting it up: a Windows machine needs letting in to the server's ClickHouse; a run
+  is named by its folder, not its database.
+- **Tests:** 96 in all — 46 for the loader, 30 in `tests/test_analysis.py`, 20 in
   `tests/test_runner.py` (a scripted LLM and a fake Grafana); no ClickHouse, LLM or
   Grafana needed.
 - **Run end to end on a dev machine:** ClickHouse 25.6 in WSL2 with the simulated run,

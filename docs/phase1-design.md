@@ -457,8 +457,13 @@ is set aside for them. Each LLM call is one request with JSON out (design rule 8
 rephrasing), the run's database and data models, each step-1 answer and the meaning
 used, the time range, every query with its C1 and C2 results and WrenAI's SQL, the
 result summary, every explanation with its C3 result, the panel and the link, and for
-each LLM call its step, duration and token use. It never holds the LLM's request
-headers.
+each LLM call its step, duration, token use and `finish_reason`. It never holds the
+LLM's request headers. **The LLM log**, `<same name>.llm.txt` beside it, holds every
+request sent to our LLM and its response in full, written as it happens: the address,
+the header names (never their values), the model and settings, the system and user
+messages; the status, `finish_reason`, tokens, the model's reply and the JSON object the
+code took from it. Running it all on the office machines, and what each step does
+inside: [phase1-runbook.md](phase1-runbook.md).
 
 ## 8. Grafana output (OURS)
 

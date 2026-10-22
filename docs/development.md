@@ -323,7 +323,9 @@ string is still kept in the `timestamp` column). See
 ## Phase 1 — plain-language request to graph (in progress)
 
 Code in `analysis/`; design in [phase1-design.md](phase1-design.md); status and next
-steps in [roadmap.md](roadmap.md) ("Now — Phase 1"). Built for the block layer: the
+steps in [roadmap.md](roadmap.md) ("Now — Phase 1"). Running it on the office machines —
+setup, every command, and what each does inside — is in
+[phase1-runbook.md](phase1-runbook.md). Built for the block layer: the
 whole request — step 0 (find the run's database, compare its columns with the catalog),
 our LLM's steps 1, 3 and 7, the run's per-interval and histogram views, the run's
 WrenAI data models, checks C1 to C3, and the Grafana panel. `pip install -r
