@@ -87,6 +87,7 @@ class Llm:
         self.pause = float(self.settings.get("rateLimitSeconds") or 0)
         self.calls: list[Call] = []
         self.log_path: Path | None = None
+        self._log_first = 0                  # calls before the log was started
         self._last = 0.0
 
     @classmethod
@@ -100,6 +101,7 @@ class Llm:
     def log_to(self, path, title: str = "") -> None:
         """From now on, write every call's request and response to this file."""
         self.log_path = Path(path)
+        self._log_first = len(self.calls)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log_path.write_text(title.rstrip() + "\n\n" if title else "", encoding="utf-8")
 
@@ -148,7 +150,7 @@ class Llm:
         names only, never their values (they hold the gateway's credentials)."""
         if self.log_path is None:
             return
-        n = len(self.calls) + 1
+        n = len(self.calls) - self._log_first + 1
         settings = ", ".join(f"{k}: {json.dumps(v, ensure_ascii=False)}"
                              for k, v in body.items() if k != "messages")
         out = [RULE, f"LLM call {n} - step {step} - {started:%Y-%m-%d %H:%M:%S} - "

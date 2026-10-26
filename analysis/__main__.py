@@ -6,6 +6,10 @@
                                                 --db replace the file's; --yes skips the
                                                 question; --no-grafana stops before
                                                 drawing. Settings: tools/config.json
+    python -m analysis score <tests.yaml> --run <run>
+                                                every request of a test set, each result
+                                                compared with its reference answer; a
+                                                report in out/<run>/score-<time>.txt
     python -m analysis check-run <run>          step 0: where the run is, what it has
     python -m analysis prepare <run>            step 0, then make (or remake) the run's
                                                 views, then check their changes add up
@@ -29,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from . import catalog as catalog_mod
@@ -248,13 +253,74 @@ def cmd_ask(args) -> int:
         db.close()
     files = f"record: {outcome.record}" + (
         f"\nLLM log (each request to our LLM and its response): {outcome.llm_log}"
-        if outcome.llm_log else "")
+        if outcome.llm_log else "") + f"\nsummary (every request on this run): {outcome.summary}"
     if outcome.status in ("drawn", "answered"):
         print(f"\n{files}")
         return 0
     label = "NOT RUN" if outcome.status == "declined" else "STOP"
     print(f"\n{label}: {outcome.message}\n{files}")
     return 0 if outcome.status == "declined" else 1
+
+
+def cmd_score(args) -> int:
+    from tools import llm_config
+
+    from .grafana import Grafana, GrafanaError
+    from .llm import Llm
+    from .runner import Runner
+    from .score import load_tests, report, score_one
+    from .views import create_views_sql
+    try:
+        tests = load_tests(args.file)
+    except RunError as exc:
+        print(f"STOP: {exc}")
+        return 1
+    if args.only:
+        wanted = {w.strip() for w in args.only.split(",") if w.strip()}
+        unknown = sorted(wanted - {t.id for t in tests})
+        if unknown:
+            print(f"STOP: no test with the id {', '.join(unknown)} in {args.file}")
+            return 1
+        tests = [t for t in tests if t.id in wanted]
+    try:
+        settings = llm_config.load(args.settings)
+        llm = Llm(settings)
+        grafana = Grafana.from_config(settings) if args.grafana else None
+    except (llm_config.ConfigError, GrafanaError) as exc:
+        print(f"settings ({args.settings or 'tools/config.json'}): {exc}")
+        return 2
+    db = _connect(args)
+    if db is None:
+        return 2
+    scores = []
+    try:
+        cat = catalog_mod.load()
+        run = check_run(db, run_name(args.run), cat, args.db)
+        if run.problems:
+            _report(run, cat)
+            print(STOP_TYPES)
+            return 1
+        for sql in create_views_sql(run, cat):        # the reference queries read the views
+            db.execute(sql)
+        runner = Runner(db, cat, llm, grafana, confirm=lambda shown: True,
+                        say=lambda text: None)
+        print(f"scoring {len(tests)} request(s) on run {run.run} (database {run.database})")
+        for t in tests:
+            s = score_one(runner, db, t, run.run, run.database)
+            scores.append(s)
+            print(f"  {s.status:<5} {t.id}" + (f" - {s.problems[0][:160]}" if s.problems else ""))
+    except RunError as exc:
+        print(f"STOP: {exc}")
+        return 1
+    finally:
+        db.close()
+    path = OUT / run.run / f"score-{datetime.now():%Y%m%d-%H%M%S}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report(scores, args.file, run.run, run.database), encoding="utf-8")
+    passed = sum(s.status == "PASS" for s in scores)
+    print(f"\npassed {passed} of {len(scores)}\nreport (each test: what was asked, understood "
+          f"and different): {path}")
+    return 0 if passed == len(scores) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -292,12 +358,24 @@ def main(argv: list[str] | None = None) -> int:
                    help="stop after the explanation; draw nothing")
     a.add_argument("--settings", default=None,
                    help="the LLM and Grafana settings (default: tools/config.json)")
+    sc = sub.add_parser("score", help="run a test set of requests; compare each result "
+                                      "with its reference answer")
+    sc.add_argument("file", help="the test set, e.g. tests/phase1/requests.yaml")
+    sc.add_argument("--run", required=True, help=run_help)
+    sc.add_argument("--db", help=db_help)
+    sc.add_argument("--only", help="the ids of the tests to run, comma-separated "
+                                   "(default: all)")
+    sc.add_argument("--grafana", action="store_true", help="also draw each in Grafana")
+    sc.add_argument("--settings", default=None,
+                    help="the LLM and Grafana settings (default: tools/config.json)")
     args = ap.parse_args(argv)
 
     if args.cmd == "plan-file":
         return cmd_plan_file(args)
     if args.cmd == "ask":
         return cmd_ask(args)
+    if args.cmd == "score":
+        return cmd_score(args)
     try:
         run = run_name(args.run)
     except RunError as exc:

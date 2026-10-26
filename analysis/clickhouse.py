@@ -36,9 +36,10 @@ class ClickHouse:
     def rows(self, sql: str, parameters: dict | None = None) -> list[tuple]:
         return self._read.query(sql, parameters=parameters or {}).result_rows
 
-    def query(self, sql: str) -> tuple[list[str], list[str], list[tuple]]:
+    def query(self, sql: str, parameters: dict | None = None
+              ) -> tuple[list[str], list[str], list[tuple]]:
         """(column names, ClickHouse types, rows) - read-only, like rows()."""
-        r = self._read.query(sql)
+        r = self._read.query(sql, parameters=parameters or {})
         return list(r.column_names), [t.name for t in r.column_types], r.result_rows
 
     def time_span(self, database: str, table: str, run: str):

@@ -25,7 +25,7 @@ from sqlglot import exp
 def _parse(sql: str) -> tuple[exp.Expression | None, list[str]]:
     try:
         statements = [s for s in sqlglot.parse(sql, read="clickhouse") if s is not None]
-    except sqlglot.errors.ParseError as exc:
+    except sqlglot.errors.SqlglotError as exc:    # a parse error, or one in tokenizing
         return None, [f"the SQL does not parse: {' '.join(str(exc).split())}"]
     if len(statements) != 1:
         return None, [f"expected one statement, got {len(statements)}"]

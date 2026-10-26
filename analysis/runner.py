@@ -15,12 +15,15 @@ failure at step 4 or 5 goes back to step 3 with the reason, at most twice; then 
 request stops with the reason - a wrong graph is never drawn as if it were right. Every
 request leaves a record in out/<run>/: the request, the meaning, every query and why it
 was refused, the checks, the result summary, the explanation and the link. Beside it,
-<same name>.llm.txt holds every request sent to our LLM and its response, in full.
+<same name>.llm.txt holds every request sent to our LLM and its response, in full, and
+out/<run>/summary.txt gains a short block per request - what was asked and understood,
+each query and its checks, the result, the outcome - to read or share.
 """
 from __future__ import annotations
 
 import json
 import re
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +48,7 @@ from .wren_project import PlanError, data_models, plan
 OUT = ROOT / "out"
 QUERY_RETRIES = 2              # step 3 is asked again at most twice (design section 7)
 EXPLAIN_TRIES = 2              # then the explanation is written by code
+RULE = "=" * 88
 
 
 @dataclass
@@ -78,6 +82,9 @@ class Outcome:
     record: Path | None = None
     link: str | None = None
     llm_log: Path | None = None    # every request to our LLM and its response
+    summary: Path | None = None    # out/<run>/summary.txt, one block per request
+    kind: str | None = None        # the panel the result suits: timeseries, bar, stat, table
+    result: tuple | None = None    # (column names, types, rows) of the checked SQL's result
 
     @property
     def ok(self) -> bool:
@@ -116,6 +123,73 @@ def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40].rstrip("-") or "request"
 
 
+def summary_block(rec: dict, outcome: Outcome) -> str:
+    """One request, from its record: what was asked and understood, each query with its
+    checks, the result, the explanation and the outcome - the record and the LLM log cut
+    down to what is needed to see what happened."""
+    steps, req = rec.get("steps") or {}, rec.get("request") or {}
+    out = [RULE, f"{rec.get('started', '')}  {outcome.status.upper()}  {req.get('request', '')}",
+           RULE]
+
+    def line(label: str, text) -> None:
+        lines = str(text).splitlines() or [""]
+        out.append(f"{label:<14}{lines[0]}")
+        out.extend(f"{'':14}{rest}" for rest in lines[1:])
+
+    def refused(problems) -> str:
+        return "passed" if problems == "passed" else "refused - " + "; ".join(problems or [])
+
+    line("request:", req.get("request", ""))
+    if req.get("rephrased"):
+        line("rephrased:", req["rephrased"])
+    if rec.get("run"):
+        line("run:", f"{rec['run']} (database {rec.get('database')})")
+    for shown, answer in zip(steps.get("2_shown", []), steps.get("2_confirmed", [])):
+        line("understood:", shown)
+        line("answer:", "yes" if answer is True else
+             f"rephrased: {answer}" if isinstance(answer, str) else "no")
+    for i, q in enumerate(steps.get("3_queries", []), start=1):
+        if "error" in q:
+            line(f"query {i}:", f"(no query) {q['error']}")
+            continue
+        line(f"query {i}:", q.get("query", ""))
+        line("  C1:", refused(q.get("c1")))
+        c2 = q.get("c2")
+        if isinstance(c2, dict):
+            line("  C2:", "passed" + "".join(f"\n{n}" for n in c2.get("notes") or []))
+            line("  SQL run:", q.get("planned", ""))
+        elif c2 is not None:
+            line("  C2:", refused(c2))
+    res = steps.get("5_result")
+    if res:
+        columns = ", ".join(f"{n} ({t})" for n, t in zip(res.get("columns") or [],
+                                                       res.get("types") or []))
+        line("result:", f"{res.get('rows')} row(s): {columns}")
+        line("summary:", res.get("summary", ""))
+    for e in steps.get("7_explanations", []):
+        if "text" in e:
+            line("explanation:", f"{e['text']}\n(C3: {refused(e.get('c3'))})")
+        elif "fallback" in e:
+            line("explanation:", "written by code from the result summary: our LLM's "
+                                 "failed check C3 twice")
+        elif "error" in e:
+            line("explanation:", f"(none) {e['error']}")
+    if steps.get("6_grafana"):
+        g = steps["6_grafana"]
+        line("panel:", f"{g.get('panel')} - {g.get('link')}")
+    line("outcome:", outcome.status if outcome.status in ("drawn", "answered") else
+         f"{outcome.status}: {outcome.message}")
+    if rec.get("error"):
+        line("error:", rec["error"].strip().splitlines()[-1])
+    calls = rec.get("llm_calls") or []
+    if calls:
+        line("LLM calls:", ", ".join(f"{c['step']} {c['seconds']} s"
+                                     + ("" if c.get("ok") else " (failed)") for c in calls))
+    line("files:", Path(outcome.record).name
+         + (f", {Path(outcome.llm_log).name}" if outcome.llm_log else ""))
+    return "\n".join(out)
+
+
 def time_range(b: Bounds, types: list[str], rows: list[tuple]) -> tuple[datetime, datetime]:
     """The dashboard's time range: the result's own first and last time when it has a
     time column - one table can end before the run does - else the range asked for."""
@@ -141,6 +215,7 @@ class Runner:
                      "steps": {}}
         stem = f"{datetime.now():%Y%m%d-%H%M%S}-{slug(request.text)}"
         run_id, log = request.run, None
+        first_call = len(getattr(self.llm, "calls", []))      # one LLM may serve many requests
         try:
             run_id = run_name(request.run)
             log = self._start_llm_log(run_id, stem, request)
@@ -149,13 +224,27 @@ class Runner:
             outcome = Outcome(stop.status, str(stop))
         except (RunError, LlmError, GrafanaError) as exc:
             outcome = Outcome("stopped", str(exc))
-        rec["llm_calls"] = [c.as_dict() for c in getattr(self.llm, "calls", [])]
+        except Exception as exc:  # noqa: BLE001 - a bug: still keep the record and the log
+            rec["error"] = traceback.format_exc()
+            outcome = Outcome("stopped", f"an unexpected error, which is a bug: "
+                                         f"{type(exc).__name__}: {exc}. The record holds the "
+                                         f"details, and the LLM log what was asked so far")
+        rec["llm_calls"] = [c.as_dict() for c in getattr(self.llm, "calls", [])[first_call:]]
         rec["llm_log"] = str(log) if log else None
         rec["outcome"] = {"status": outcome.status, "message": outcome.message,
                           "link": outcome.link}
         outcome.record = self._save(run_id, stem, rec)
         outcome.llm_log = log
+        outcome.summary = self._summarize(run_id, rec, outcome)
         return outcome
+
+    def _summarize(self, run_id: str, rec: dict, outcome: Outcome) -> Path:
+        """Append the request's block to out/<run>/summary.txt: the record and the LLM
+        log cut down to what is needed to see what happened - short enough to share."""
+        path = self.out / (run_id or "unknown-run") / "summary.txt"
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(summary_block(rec, outcome) + "\n")
+        return path
 
     def _start_llm_log(self, run_id: str, stem: str, request: Request) -> Path | None:
         """<stem>.llm.txt beside the record: each request to our LLM and its response,
@@ -198,7 +287,9 @@ class Runner:
                 parts = "; ".join(f"{n['part']} - {n['reason']}" for n in meaning.not_available)
                 raise Stop("refused", "nothing in the request can be answered from the "
                            "described data" + (f": {parts}" if parts else ""))
-            answer = self.confirm(show(meaning, run.run, b))                     # step 2
+            shown = show(meaning, run.run, b)
+            rec["steps"].setdefault("2_shown", []).append(shown)
+            answer = self.confirm(shown)                                         # step 2
             rec["steps"].setdefault("2_confirmed", []).append(answer)
             if answer is True:
                 break
@@ -235,7 +326,8 @@ class Runner:
             rec["steps"]["6_grafana"] = {"panel": kind, "link": link,
                                          "time": {"from": when(start), "to": when(end)}}
             self.say(f"\nGrafana: {link}")
-        return Outcome("drawn" if link else "answered", description, link=link)
+        return Outcome("drawn" if link else "answered", description, link=link, kind=kind,
+                       result=(names_out, types_out, rows))
 
     def _span(self, run) -> tuple[datetime, datetime]:
         """The run's first and last sample over its described sampled tables."""

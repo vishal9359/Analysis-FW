@@ -243,14 +243,17 @@ A request file has `run:` and `request:` (what to show, in plain words); `--run`
    explanation is in the panel's ⓘ; the time range is the result's own.
 
 It prints the meaning, the SQL, `C2: passed` (and its notes), the explanation, the
-Grafana link, and two files in `out/<run-folder>/`, both named `<time>-<request>`:
+Grafana link, and the files it wrote in `out/<run-folder>/` — two named
+`<time>-<request>`, and one for the whole run:
 
 | File | What it holds |
 |---|---|
-| `….json`, the record | the request, the data models, each LLM answer and the meaning used, the time range, every query with C1, WrenAI's SQL and C2, the result summary, every explanation with C3, the panel and link, and per LLM call its step, seconds, tokens and `finish_reason` |
+| `….json`, the record | the request, the data models, each LLM answer and the meaning used, the time range, every query with C1, WrenAI's SQL and C2, the result summary, every explanation with C3, the panel and link, and per LLM call its step, seconds, tokens and `finish_reason`; after an unexpected error, its traceback |
 | `….llm.txt`, the LLM log | every request sent to our LLM and its response, in full, written as it happens: the address, the header names (never their values), the model and settings, the whole system and user messages; then the HTTP status, why the model stopped (`finish_reason`; `length` means it hit `max_tokens`), the tokens, the model's reply as written, and the JSON object the code took from it |
+| `summary.txt`, for the run | one short block per request, added each time: the request, what was understood (the step-2 text) and your answer, each query with its C1 and C2 results and the SQL run, the result's columns and summary, the explanation with C3, the panel, the outcome, the LLM calls' times, and the names of the two files above. The one file to read, or share, to see what happened |
 
-`out/` is git-ignored: the records hold result numbers from real runs.
+`out/` is git-ignored: the records, logs and summaries hold result numbers from real
+runs.
 
 ### 9. The example requests
 
@@ -267,12 +270,34 @@ Grafana link, and two files in `out/<run-folder>/`, both named `<time>-<request>
 
 To try your own wording, copy a file and change its `request:` line.
 
-### 10. What to send back
+### 10. Score the test set — `score`
 
-For each request: a screenshot of the terminal, from `I will show` to the link, and one
-of the Grafana panel; for one that stops, the `STOP:` line. The LLM log shows what our
-LLM was asked and what it answered — the place to look when a reading or a query is
-wrong.
+```
+python -m analysis score tests/phase1/requests.yaml --run <run-folder> --db <database>
+```
+
+`--only <id>,<id>` runs some tests only; `--grafana` also draws each.
+
+**Inside:** `tests/phase1/requests.yaml` holds block-layer requests, each with a
+*reference query* written by hand — the right answer, in SQL on the run's views. For each
+request, `score` runs the whole of `ask` (our LLM included, the meaning taken as
+confirmed, nothing drawn), runs the reference query, and compares the two results: every
+number column of the reference must match one column of the result, value for value — in
+any order, within 1 % — with the same number of rows. Names and labels may differ. A test
+also fails if the request names a chart and another is drawn, or if a part that must be
+reported as not available is not. It prints PASS, FAIL or STOP per request and the
+score, and writes `out/<run-folder>/score-<time>.txt`: per request what was asked and
+understood, what differs, and the names of its record and LLM log. Each request also
+adds its block to `summary.txt`.
+
+This is how a change is judged: the score before and after it, on the same run.
+
+### 11. What to send back
+
+`out/<run-folder>/summary.txt` — it has every request you asked on that run — and, after
+scoring, the `score-<time>.txt` report. For a request that went wrong, say what you
+expected. The LLM log shows what our LLM was asked and what it answered: the place to look
+when a reading or a query is wrong.
 
 ---
 
@@ -285,4 +310,5 @@ wrong.
 | `'…' is the name of a database, not of a run` | the database's name given as the run | the run it names, and `--db` |
 | `cannot reach ClickHouse (config/config.yaml, CH_HOST / CH_PORT)` | wrong host or port in `config/config.yaml` | step 3 |
 | readiness check: `Unknown … identifier read_ios` | an old copy of the check (before the column renames) | step 1 |
+| `sqlglot.errors.TokenError: Missing "` and a traceback | before 2026-10-22, SQL from our LLM that could not be read crashed check C1 | step 1: such a query is now refused and sent back to our LLM |
 | `UnicodeEncodeError` on Windows | the console cannot print a character such as `µ` | add `-X utf8` after `python` |

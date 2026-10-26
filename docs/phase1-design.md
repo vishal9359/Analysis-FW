@@ -462,8 +462,10 @@ LLM's request headers. **The LLM log**, `<same name>.llm.txt` beside it, holds e
 request sent to our LLM and its response in full, written as it happens: the address,
 the header names (never their values), the model and settings, the system and user
 messages; the status, `finish_reason`, tokens, the model's reply and the JSON object the
-code took from it. Running it all on the office machines, and what each step does
-inside: [phase1-runbook.md](phase1-runbook.md).
+code took from it. **The run's summary**, `out/<run>/summary.txt`, gains one short block
+per request — what was asked and understood, each query and its checks, the result, the
+outcome — to read or share. Running it all on the office machines, and what each step
+does inside: [phase1-runbook.md](phase1-runbook.md).
 
 ## 8. Grafana output (OURS)
 
@@ -508,15 +510,21 @@ reason, so the next try can correct it.
 
 ## 10. Test set and scoring (OURS)
 
-- `tests/phase1/requests.yaml` holds requests with known right answers. The answer
-  key comes from the existing Grafana panels: their SQL, run on the same run, gives
-  the expected numbers. Those panels use the old column names and the shared
-  `profile_fw` database, so their SQL is adapted once to the new names and to the
-  run's database.
-- **Trial: 10 requests**, block layer only. They include one that must be refused or
-  partly answered (filesystem latency) and one that can be read two ways.
-- A scoring script runs each request without the yes/no prompt, records the meaning
-  it picked, and compares numbers with the answer key.
+- `tests/phase1/requests.yaml` holds requests with known right answers. **Built
+  2026-10-22 with 17 block-layer requests**, each with a *reference query* written by
+  hand on the run's views: over time, per minute, a total and an average over the run,
+  the last minutes of the run, per flag and per size, a latency distribution, and the
+  five example requests of the requirements (two of them partly answerable). They are
+  checked by the team; the existing Grafana panels, once exported, add to them — their
+  SQL, adapted to the new column names and to the run's database, gives the expected
+  numbers.
+- **The scoring command**, `python -m analysis score <tests> --run <run>`, runs each
+  request without the yes/no prompt, runs its reference query, and compares: every
+  number column of the reference must match one column of the result, value for value,
+  in any order, within 1 %, with as many rows. It also checks a chart the request names,
+  and the parts that must be reported as not available. A report per run of the test
+  set says, per request, what was understood and what differs
+  ([phase1-runbook.md](phase1-runbook.md), step 10).
 - **Acceptance (full Phase 1):** 30 requests, pass mark 27, all five example requests,
   no wrong graph shown as right (C5, C6).
 

@@ -73,7 +73,7 @@ class RunDB:
     def execute(self, sql):
         self.views.append(sql)
 
-    def query(self, sql):
+    def query(self, sql, parameters=None):
         self.queries.append(sql)
         return self.results.pop(0)
 
@@ -171,6 +171,33 @@ def test_c1_and_c2_send_the_query_back_with_the_reason(cat, tmp_path):
     assert tries[2]["c2"]["passed"] and outcome.status == "drawn"
     third_prompt = [u for s, u in llm.prompts if s.startswith("3")][2]
     assert "This query was refused" in third_prompt and "negative values" in third_prompt
+
+
+def test_sql_that_cannot_be_read_is_refused_not_a_crash(cat, tmp_path):
+    pytest.importorskip("wren.engine")
+    broken = GOOD_SQL.replace('AS "read IOPS"', 'AS "read IOPS')       # a quote left open
+    llm = ScriptedLlm([IOPS_MEANING], [query(broken), query(GOOD_SQL)],
+                      [{"explanation": "Read IOPS at the block layer, per second."}])
+    outcome, record, _, _ = ask(cat, tmp_path, llm, [SERIES], FakeGrafana())
+    assert any("does not parse" in p for p in record["steps"]["3_queries"][0]["c1"])
+    assert outcome.status == "drawn"
+
+
+def test_an_unexpected_error_still_leaves_the_record(cat, tmp_path):
+    pytest.importorskip("wren.engine")
+
+    class BrokenDB(RunDB):
+        def query(self, sql, parameters=None):
+            raise RuntimeError("the server went away")
+
+    llm = ScriptedLlm([IOPS_MEANING], [query(GOOD_SQL)])
+    runner = Runner(BrokenDB([]), cat, llm, FakeGrafana(), confirm=lambda shown: True,
+                    say=lambda s: None, out=tmp_path)
+    outcome = runner.ask(Request(run=RUN, text="Show read IOPS"))
+    record = json.loads(outcome.record.read_text(encoding="utf-8"))
+    assert outcome.status == "stopped" and "unexpected error" in outcome.message
+    assert "RuntimeError: the server went away" in record["error"]
+    assert record["steps"]["3_queries"][0]["c1"] == "passed"      # how far it got
 
 
 def test_no_wrong_graph_after_three_refused_queries(cat, tmp_path):
@@ -387,6 +414,64 @@ def test_the_llm_log_sits_beside_the_record(cat, tmp_path):
     assert outcome.llm_log == llm.log_path and outcome.llm_log.name.endswith(".llm.txt")
     assert outcome.llm_log.name[:-len(".llm.txt")] == outcome.record.stem
     assert record["llm_log"] == str(outcome.llm_log) and "request: Show read IOPS" in llm.title
+
+
+def test_each_request_adds_a_block_to_the_runs_summary(cat, tmp_path):
+    pytest.importorskip("wren.engine")
+    raw = f"SELECT read_io_count FROM {DB}.{B1} WHERE {B1}.run_id = '{RUN}'"
+    llm = ScriptedLlm([IOPS_MEANING, IOPS_MEANING], [query(raw), query(GOOD_SQL)],
+                      [{"explanation": "Read IOPS at the block layer, per second."}])
+    first, _, _, _ = ask(cat, tmp_path, llm, [SERIES], FakeGrafana())
+    second, _, _, _ = ask(cat, tmp_path, ScriptedLlm([{"answerable": False, "measures": []}]), [])
+    assert first.summary == second.summary == tmp_path / RUN / "summary.txt"
+    text = first.summary.read_text(encoding="utf-8")
+    for expected in ("DRAWN  Show read IOPS", f"run:          {RUN} (database {DB})",
+                     "understood:   I will show:  read IOPS, per second", "answer:       yes",
+                     "query 1:      SELECT read_io_count", "  C1:         refused - ",
+                     "query 2:      SELECT linux_block_1_stats.ts", "  C2:         passed",
+                     "  SQL run:    ", "result:       3 row(s): ts (DateTime)",
+                     "(C3: passed)", "panel:        timeseries - http://grafana.test/d/afw-x",
+                     "outcome:      drawn", f"files:        {first.record.name}",
+                     "REFUSED  Show read IOPS", "outcome:      refused: nothing in the request"):
+        assert expected in text, expected
+
+
+def test_scoring_compares_numbers_not_names():
+    from analysis.score import compare
+    ref = (["flag", "read"], ["String", "Nullable(Int64)"], [("REQ_SYNC", 10), ("REQ_FUA", 2)])
+    same = (["REQ flag", "reads"], ["String", "UInt64"], [("fua", 2.0), ("sync", 10.0)])
+    assert compare(ref, same) == []                     # other names, other order: agree
+    off = (["flag", "reads"], ["String", "UInt64"], [("REQ_SYNC", 10), ("REQ_FUA", 3)])
+    assert any('matches the reference\'s "read"' in p for p in compare(ref, off))
+    short = (["flag", "reads"], ["String", "UInt64"], [("REQ_SYNC", 10)])
+    assert "1 row(s), the reference has 2" in compare(ref, short)
+
+
+def test_a_test_is_scored_against_its_reference(cat, tmp_path):
+    pytest.importorskip("wren.engine")
+    from analysis.score import Test, score_one
+    test = Test(id="iops", request="Show read IOPS", chart="timeseries",
+                reference="SELECT ts, read_io_count_delta / interval_s FROM <db>.x "
+                          "WHERE run_id = {run:String}")
+    wrong = (["ts", "read IOPS"], ["DateTime", "Float64"],
+             [(START, None), (END, 1.0), (END, 2.0)])
+    for reference, status in ((SERIES, "PASS"), (wrong, "FAIL")):
+        db = RunDB([SERIES, reference])         # the system's result, then the reference's
+        llm = ScriptedLlm([IOPS_MEANING], [query(GOOD_SQL)],
+                          [{"explanation": "Read IOPS at the block layer, per second."}])
+        runner = Runner(db, cat, llm, None, confirm=lambda shown: True, say=lambda s: None,
+                        out=tmp_path)
+        score = score_one(runner, db, test, RUN, DB)
+        assert score.status == status, score.problems
+        assert db.queries[-1] == f"SELECT ts, read_io_count_delta / interval_s FROM `{DB}`.x " \
+                                 "WHERE run_id = {run:String}"
+
+
+def test_the_test_set_loads():
+    from analysis.score import load_tests
+    tests = load_tests(ROOT / "tests" / "phase1" / "requests.yaml")
+    assert len(tests) >= 17 and all("{run:String}" in t.reference for t in tests)
+    assert {t.id for t in tests} >= {"io-flags-per-flag", "example-1-io-counts"}
 
 
 def test_a_reply_may_wrap_its_json():

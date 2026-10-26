@@ -26,8 +26,10 @@ knowledge/                    ← what every column means (Measurement Catalog),
 src/                          ← Module 1, the loader: python -m src <run>
 analysis/                     ← Phase 1 code: python -m analysis ask <request.yaml> (the
                                 whole request: runner.py, llm.py, steps.py, grafana.py,
-                                checks.py) + check-run | prepare | plan | plan-file
+                                checks.py) + score (score.py) + check-run | prepare |
+                                plan | plan-file
 requests/                     ← example request files (the five of the requirements, +1)
+tests/phase1/requests.yaml    ← the trial test set: requests with reference queries
 tools/                        ← office-box checks (check_phase1_env.py, check_llm.py) +
                                 catalog.py; config.json = LLM + Grafana credentials,
                                 git-ignored
@@ -107,8 +109,8 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
 "Now — Phase 1". In short (2026-10-22):
 
 - **Branch:** Phase 1 work is on **`phase1`**, rebased onto `main` on 2026-10-20 (it has
-  `main`'s `latency_buckets` loader); not yet merged. All 96 tests pass (46 loader,
-  50 Phase 1); `python tools/catalog.py check` passes.
+  `main`'s `latency_buckets` loader); not yet merged. All 102 tests pass (46 loader,
+  56 Phase 1); `python tools/catalog.py check` passes.
 - **Done:** Module 1 loader, including run-level sidecars (`latency_buckets`,
   ADR-0011). Phase 1 requirements, tool choice (WrenAI trial, Grafana draws), office-box
   readiness check, design ([docs/phase1-design.md](docs/phase1-design.md)), Measurement
@@ -123,9 +125,15 @@ The full board — done, next, waiting, known issues — is [docs/roadmap.md](do
   writer; a record per request, and an LLM log with every request and response in
   full) and labelled latency histograms (a `<table>_histograms` view per run). Run end to end on ClickHouse 25.6 and Grafana
   13.2.4 in WSL2 with a stand-in for our LLM; never yet with our LLM.
-- **Next:** on the office box, `ask` with our LLM on the real run (the files in
-  `requests/`), then the user's review of the block layer; then the trial test set.
-  The real run also has filesystem, platform and `block_3` tables, not catalogued yet.
+- **First run with our LLM (2026-10-22)**, from the office Windows machine: some right,
+  some not understood, some wrong numbers — our LLM writing SQL is the weak point
+  (roadmap, "First run with our LLM"). Built then: `out/<run>/summary.txt`, the test set
+  `tests/phase1/requests.yaml` (17 requests with reference queries) and
+  `python -m analysis score`.
+- **Next:** the user checks the reference queries and scores the real run (the
+  baseline); then labelled-row views for the flag and size groups, and the form our LLM
+  fills while code writes the SQL — each scored against the baseline. The real run also
+  has filesystem, platform and `block_3` tables, not catalogued yet.
 - **Decided 2026-10-20:** build all of Phase 1 for the block layer first; the user
   reviews it before other layers are added.
 - **Waiting on the team:** the existing Grafana dashboards exported as JSON (the answer

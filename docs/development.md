@@ -333,6 +333,7 @@ requirements.txt` brings WrenAI (pinned to 0.15.0; it contains no AI).
 
 ```bash
 python -m analysis ask requests/io-counts.yaml   # the whole request, to a Grafana panel
+python -m analysis score tests/phase1/requests.yaml --run <run>   # the test set, scored
 python -m analysis check-run <run>         # where the run is, what it has (read-only)
 python -m analysis prepare <run>           # makes the run's views, checks they add up
 python -m analysis plan <run> "<query>"    # WrenAI plans it, check C1; --execute runs it

@@ -1,0 +1,244 @@
+# =============================================================================
+#  Phase 1 trial test set - block-layer requests, each with its right answer
+# =============================================================================
+#  python -m analysis score tests/phase1/requests.yaml --run <run-folder> --db <database>
+#
+#  Each request runs through the whole system - our LLM included, the meaning taken
+#  as confirmed, nothing drawn - and its result is compared with the result of the
+#  reference query below: every number column of the reference must match one
+#  column of the result, value for value (in any order, within 1 %), with the same
+#  number of rows. Column names and labels may differ.
+#
+#  A reference query is written by hand on the run's views (made by `prepare`):
+#  <db> stands for the run's database and {run:String} for the run's name. Please
+#  check that each one computes what its request means. Where a request can fairly
+#  be read two ways, `note` says so, and the team's existing dashboards decide.
+#
+#  Optional keys:  chart - the chart the request names; it must be drawn as that.
+#                  not_available - words of the parts that must be reported as
+#                  "not described yet" while the rest is answered.
+# =============================================================================
+
+# ---- over time ----------------------------------------------------------------
+
+- id: iops-over-time
+  request: Show read and write IOPS over time at the block layer.
+  reference: |
+    SELECT ts,
+           read_io_count_delta / interval_s  AS read_iops,
+           write_io_count_delta / interval_s AS write_iops
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+    ORDER BY ts
+
+- id: bandwidth-over-time
+  request: Show the read and write bandwidth in MiB/s over the run.
+  reference: |
+    SELECT ts,
+           read_sectors_512b_delta * 512 / 1048576 / interval_s  AS read_mib_s,
+           write_sectors_512b_delta * 512 / 1048576 / interval_s AS write_mib_s
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+    ORDER BY ts
+
+- id: latency-over-time
+  request: Show the average read and write latency over time.
+  reference: |
+    SELECT ts,
+           read_time_ms_delta / nullIf(read_io_count_delta, 0)   AS read_ms,
+           write_time_ms_delta / nullIf(write_io_count_delta, 0) AS write_ms
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+    ORDER BY ts
+  note: Latency as iostat's r_await and w_await, of completed requests; block_2's time in
+    the device or the driver is another reading.
+
+- id: queue-depth-over-time
+  request: Show the average queue depth over time.
+  reference: |
+    SELECT ts, io_time_ms_delta / (interval_s * 1000) AS queue_depth
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+    ORDER BY ts
+
+- id: device-busy-over-time
+  request: Show how busy the device was over the run, in percent.
+  reference: |
+    SELECT ts, device_busy_time_ms_delta / (interval_s * 1000) * 100 AS busy_pct
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+    ORDER BY ts
+
+- id: sync-writes-over-time
+  request: Show write bios with the REQ_SYNC flag per second over time.
+  reference: |
+    SELECT ts, write_io_flags_req_sync_delta / interval_s AS sync_writes_per_s
+    FROM <db>.linux_block_2_misc_interval
+    WHERE run_id = {run:String}
+    ORDER BY ts
+
+- id: iops-per-minute
+  request: Show read IOPS per minute.
+  reference: |
+    SELECT toStartOfMinute(ts) AS minute,
+           sum(read_io_count_delta) / sum(interval_s) AS read_iops
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+    GROUP BY minute
+    ORDER BY minute
+  note: A rate over a minute is the I/Os in it over its seconds, not an average of the
+    per-second rates.
+
+# ---- one number -----------------------------------------------------------------
+
+- id: total-data-read
+  request: How much data was read in the whole run, in GiB?
+  reference: |
+    SELECT sum(read_sectors_512b_delta) * 512 / 1073741824 AS gib
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+
+- id: average-read-latency-of-the-run
+  request: What was the average read latency over the whole run, in ms?
+  reference: |
+    SELECT sum(read_time_ms_delta) / nullIf(sum(read_io_count_delta), 0) AS read_ms
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+  note: An average over the run weighs every request the same - all the time over all
+    the reads - not an average of the per-second averages.
+
+- id: reads-in-the-last-2-minutes
+  request: How many reads completed in the last 2 minutes of the run?
+  reference: |
+    SELECT sum(read_io_count_delta) AS reads
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+      AND ts >= (SELECT max(ts) FROM <db>.linux_block_1_stats
+                 WHERE run_id = {run:String}) - INTERVAL 120 SECOND
+  note: The last 2 minutes are those of the run, not of the clock.
+
+# ---- per category ---------------------------------------------------------------
+
+- id: io-flags-per-flag
+  request: Show the total number of bios per REQ_* flag over the whole run, read and
+    write side by side, as a bar chart.
+  chart: bar
+  reference: |
+    SELECT f.1 AS flag, sum(f.2) AS read_bios, sum(f.3) AS write_bios
+    FROM <db>.linux_block_2_misc_interval
+    ARRAY JOIN [
+      ('REQ_FAILFAST_DEV', read_io_flags_req_fail_fast_dev_delta, write_io_flags_req_fail_fast_dev_delta),
+      ('REQ_FAILFAST_TRANSPORT', read_io_flags_req_fail_fast_transport_delta, write_io_flags_req_fail_fast_transport_delta),
+      ('REQ_FAILFAST_DRIVER', read_io_flags_req_fail_fast_driver_delta, write_io_flags_req_fail_fast_driver_delta),
+      ('REQ_SYNC', read_io_flags_req_sync_delta, write_io_flags_req_sync_delta),
+      ('REQ_META', read_io_flags_req_meta_delta, write_io_flags_req_meta_delta),
+      ('REQ_PRIO', read_io_flags_req_prio_delta, write_io_flags_req_prio_delta),
+      ('REQ_NOMERGE', read_io_flags_req_nomerge_delta, write_io_flags_req_nomerge_delta),
+      ('REQ_IDLE', read_io_flags_req_idle_delta, write_io_flags_req_idle_delta),
+      ('REQ_INTEGRITY', read_io_flags_req_integrity_delta, write_io_flags_req_integrity_delta),
+      ('REQ_FUA', read_io_flags_req_fua_delta, write_io_flags_req_fua_delta),
+      ('REQ_PREFLUSH', read_io_flags_req_preflush_delta, write_io_flags_req_preflush_delta),
+      ('REQ_RAHEAD', read_io_flags_req_rahead_delta, write_io_flags_req_rahead_delta),
+      ('REQ_BACKGROUND', read_io_flags_req_background_delta, write_io_flags_req_background_delta),
+      ('REQ_NOWAIT', read_io_flags_req_nowait_delta, write_io_flags_req_nowait_delta),
+      ('REQ_POLLED', read_io_flags_req_polled_delta, write_io_flags_req_polled_delta),
+      ('REQ_ALLOC_CACHE', read_io_flags_req_alloc_cache_delta, write_io_flags_req_alloc_cache_delta),
+      ('REQ_SWAP', read_io_flags_req_swap_delta, write_io_flags_req_swap_delta),
+      ('REQ_DRV', read_io_flags_req_drv_delta, write_io_flags_req_drv_delta),
+      ('REQ_FS_PRIVATE', read_io_flags_req_fs_private_delta, write_io_flags_req_fs_private_delta),
+      ('REQ_ATOMIC', read_io_flags_req_atomic_delta, write_io_flags_req_atomic_delta),
+      ('REQ_NOUNMAP', read_io_flags_req_nounmap_delta, write_io_flags_req_nounmap_delta)
+    ] AS f
+    WHERE run_id = {run:String}
+    GROUP BY flag
+    ORDER BY flag
+  note: All 21 flags, so a flag no bio carried shows as 0.
+
+- id: read-size-distribution
+  request: Show how many read bios there were of each aligned size over the whole run.
+  reference: |
+    SELECT s.1 AS size, sum(s.3) AS read_bios
+    FROM <db>.linux_block_2_misc_interval
+    ARRAY JOIN [
+      ('< 4 KiB', 0, read_lt_4kb_delta), ('4 KiB', 1, read_4kb_delta),
+      ('8 KiB', 2, read_8kb_delta), ('16 KiB', 3, read_16kb_delta),
+      ('32 KiB', 4, read_32kb_delta), ('64 KiB', 5, read_64kb_delta),
+      ('128 KiB', 6, read_128kb_delta), ('256 KiB', 7, read_256kb_delta),
+      ('512 KiB', 8, read_512kb_delta), ('1 MiB', 9, read_1mb_delta),
+      ('2 MiB', 10, read_2mb_delta), ('4 MiB', 11, read_4mb_delta),
+      ('8 MiB', 12, read_8mb_delta), ('> 8 MiB', 13, read_gt_8mb_delta)
+    ] AS s
+    WHERE run_id = {run:String}
+    GROUP BY s.1, s.2
+    ORDER BY s.2
+  note: The catalog's aligned sizes, read_lt_4kb to read_gt_8mb; the unaligned ranges
+    are another group.
+
+- id: read-latency-distribution
+  request: Show the read latency distribution on the device for the whole run.
+  reference: |
+    SELECT bucket, sum(io_count_delta) AS reads
+    FROM <db>.linux_block_2_misc_histograms
+    WHERE run_id = {run:String} AND histogram = 'read device latency'
+    GROUP BY bucket_index, bucket
+    ORDER BY bucket_index
+
+# ---- the five example requests of the requirements --------------------------------
+
+- id: example-1-io-counts
+  request: Show me all read-write I/O counts.
+  reference: |
+    SELECT ts, read_io_count_delta AS reads, write_io_count_delta AS writes
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+    ORDER BY ts
+  note: Read as the counts per sample over time; the totals for the whole run are
+    another fair reading.
+
+- id: example-2-split-ios
+  request: Show me all read-write split I/Os.
+  reference: |
+    SELECT ts, read_splits_delta AS read_splits, write_splits_delta AS write_splits
+    FROM <db>.linux_block_2_misc_interval
+    WHERE run_id = {run:String}
+    ORDER BY ts
+  note: Read as the counts per sample over time.
+
+- id: example-3-latency-fs-and-block
+  request: Show latency for filesystem and block layers, but not SSD.
+  not_available: [filesystem]
+  reference: |
+    SELECT ts,
+           read_time_ms_delta / nullIf(read_io_count_delta, 0)   AS read_ms,
+           write_time_ms_delta / nullIf(write_io_count_delta, 0) AS write_ms
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+    ORDER BY ts
+  note: The filesystem tables are not described yet, so that part is reported and the
+    block part still drawn.
+
+- id: example-4-iops-block-vs-nvme
+  request: Compare read and write IOPS between the block and NVMe layers.
+  not_available: [nvme]
+  reference: |
+    SELECT ts,
+           read_io_count_delta / interval_s  AS read_iops,
+           write_io_count_delta / interval_s AS write_iops
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+    ORDER BY ts
+  note: The NVMe tables are not described yet, so that part is reported and the block
+    part still drawn.
+
+- id: example-5-bandwidth-last-30-min
+  request: Show the bandwidth trend for the last 30 minutes.
+  reference: |
+    SELECT ts,
+           read_sectors_512b_delta * 512 / 1048576 / interval_s  AS read_mib_s,
+           write_sectors_512b_delta * 512 / 1048576 / interval_s AS write_mib_s
+    FROM <db>.linux_block_1_stats_interval
+    WHERE run_id = {run:String}
+      AND ts >= (SELECT max(ts) FROM <db>.linux_block_1_stats
+                 WHERE run_id = {run:String}) - INTERVAL 30 MINUTE
+    ORDER BY ts
+  note: The last 30 minutes of the run; a shorter run is shown whole.

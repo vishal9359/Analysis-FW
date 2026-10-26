@@ -156,6 +156,53 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
 - **Not yet run with our LLM.** The prompts of steps 1, 3 and 7 meet the real model only
   on the office box (next, below).
 
+### First run with our LLM (2026-10-22), and what it showed
+
+From the office Windows machine, against the real run: some requests drew the right
+graph, some were not understood, and some drew wrong numbers. The IO flags showed it
+best:
+- "show me block layer IO flags" was read as over time, when totals were meant;
+- with "total", it drew one number per column;
+- with "per flag, read and write, as a bar chart", our LLM kept 4 of the 21 flags "as
+  examples", wrote SQL with a quote left open, and check C1 crashed on it.
+
+The causes, in order of weight:
+1. **Our LLM writes the SQL.** Long or fiddly SQL is where it fails: turning 21 flag
+   columns into rows, re-aggregating a ratio over a range, quoting. The checks catch an
+   error of form, not one of meaning.
+2. **The data's shape does not fit the question.** Flags and sizes are columns in
+   ClickHouse but categories in a question. The latency buckets were already reshaped
+   (the histogram view); the other groups were not.
+3. **There was no measure of correctness.** Without known right answers, a wrong graph
+   can look as right as a right one.
+
+Built that day:
+- C1 refuses SQL it cannot read; an unexpected error keeps the record, with the
+  traceback in it.
+- **The run's summary**, `out/<run>/summary.txt`: one short block per request, to read or
+  share.
+- **The test set**, `tests/phase1/requests.yaml`: 17 block-layer requests, each with a
+  reference query written by hand. **The scoring command**, `python -m analysis score`,
+  compares each result with its reference (design §10).
+- 102 tests pass (46 loader, 56 Phase 1).
+
+**The direction proposed** (agreed in principle by the user on 2026-10-22, with one doubt
+— can code write the SQL correctly? — that the test set is to answer: its reference
+queries are the patterns code would write):
+- **Our LLM fills in a form** from a closed list taken from the catalog: the measures;
+  over time, a total, or a distribution; broken down by what; the time range; the
+  chart. **Code writes the SQL** from it, from a few patterns written once and each
+  checked against a reference answer. Our LLM's own SQL stays as a fallback for
+  questions the form cannot express.
+- **Column groups become labelled rows**, by rules in the catalog — a member's name and
+  its direction (read or write) — that engineers check like the rest of it; one piece of
+  code makes the views, as for the latency buckets.
+- **The chart** is the one the request names; otherwise the one that suits the result's
+  shape. More panel types (pie, bar gauge, heatmap) can be added.
+- **A second calculation** checks a result where code knows what was asked: for
+  example, a counter's total over the run must equal its last value minus its first.
+  If the two differ, nothing is drawn.
+
 ### Next, in order
 
 1. ~~**On a machine with ClickHouse** (WSL2; README, "Phase 1"): load a simulated run
@@ -167,16 +214,18 @@ Run/verify: see the [README](../README.md). Carries forward into production as t
 3. ~~**Describe `latency_buckets`**, so Phase 1 can label latency histograms.~~
    **Done (2026-10-21)** — see above.
 4. ~~**Build step 4, the request runner.**~~ **Built (2026-10-21)** — see above.
-5. **On the office box, with our LLM and the real run:** set `grafana.token` in
-   `tools/config.json`; run `prepare <run>` again (it now makes the histogram view, and
-   on a real run should find no I/O in an unused bucket column — catalog Q16); run
-   `python -m analysis ask <file> --run <run>` on each file in `requests/`. The printed
-   output and the records in `out/<run>/` show how our LLM reads the prompts: tune them
-   from there. Then the user reviews the block layer.
-6. **Test set and scoring:** 10 block-layer trial requests, answers from the exported
-   dashboards (below); then the trial decision: keep WrenAI, switch to Cube Core, or
-   plan ourselves.
-7. **After the block-layer review:** catalog the other tables the real run has (`tools/catalog.py skeleton`,
+5. ~~**With our LLM and the real run:** `ask` on each file in `requests/`.~~ **Done
+   (2026-10-22)**, from the office Windows machine — see "First run with our LLM" above.
+6. **Baseline score:** the user checks the reference queries in
+   `tests/phase1/requests.yaml`, then runs `python -m analysis score` on the real run —
+   the score of today's design. The failing requests and `summary.txt` show why each
+   fails; the exported dashboards (below) add requests.
+7. **The labelled-row views** for the flag and size groups, from catalog rules; score
+   again.
+8. **The form and the SQL patterns**, scored on the same test set against today's design;
+   then the trial decision — keep WrenAI, switch to Cube Core, or plan ourselves — as
+   ADR-0012. Then the second calculation, and more panel types.
+9. **After the block-layer review:** catalog the other tables the real run has (`tools/catalog.py skeleton`,
    after copying their `.proto` files into `tests/sample_protos/`): NVMe, syscall and
    SSD, and the newer ones — `linux_block_3_sync`, the filesystem tables
    (`linux_ext4fs_1_iostats`, `_2_sync`, `_3_buffered`, `linux_fs_1_readahead`,
